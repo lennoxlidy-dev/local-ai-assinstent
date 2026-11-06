@@ -263,7 +263,7 @@ class Assistant:
                 self.ctx.bus.publish("assistant.status", text="loading model")
             result = self.agent.run(text, system=system_prompt(self.profile()), context=self.context(),
                                     history=list(self._history), task=task, thinking=thinking, trace=trace,
-                                    on_content=on_content)
+                                    on_content=on_content, language=self.lang)
         except Cancelled:
             raise
         except LLMError as e:

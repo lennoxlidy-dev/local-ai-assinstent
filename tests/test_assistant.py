@@ -32,7 +32,8 @@ def test_fast_path_fallback_opens_music_app(ts):
 
 def test_llm_path_and_history(ts):
     a, llm, p = make(ts, tools(call("remember", fact="Sam likes green")), answer("Noted!"), answer("Green."))
-    r = a.handle("remember that I like green")
+    assert a.fastpath.match("my favourite colour is green, keep that in mind") is None
+    r = a.handle("my favourite colour is green, keep that in mind")
     assert (r.via, r.text) == ("llm", "Noted!")
     r = a.handle("what colour do I like?")
     msgs = llm.seen[-1]

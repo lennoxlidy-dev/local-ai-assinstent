@@ -228,7 +228,8 @@ def register(reg: ToolRegistry) -> None:
         obj(("action",), action=Str("get or set", enum=("get", "set")), text=Str("Text to copy", max_len=100000)),
         "system.clipboard", _plan_clip, _run_clip))
     reg.register(Tool(
-        "power", "Lock, sleep, shut down, restart or sign out.",
+        "power", "Lock, sleep, shut down, restart or sign out the PC - only when the user explicitly asks for "
+                 "exactly that (never to 'close' an app).",
         obj(("action",), action=Str("What to do", enum=("lock", "sleep", "shutdown", "restart", "sign_out"))),
         "system.power", _plan_power, _run_power))
     reg.register(Tool(

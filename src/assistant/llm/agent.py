@@ -36,11 +36,13 @@ _CLAIM = re.compile(
     r"\b(i(?:'ve| have) (?:saved|created|deleted|moved|renamed|opened|closed|set|muted|noted|remembered|started|"
     r"turned|changed|copied|installed|locked)|i(?:'ll| will) remember|(?:has|have) been (?:saved|created|deleted|"
     r"moved|renamed|opened|closed|set|muted|copied|installed)|is now (?:open|closed|set|muted|saved|on|off)|"
-    r"ich merke mir|ich habe (?:es |das |dir |die |den |ihn |sie )?(?:gespeichert|erstellt|gelöscht|verschoben|"
+    r"ich merke mir|ich habe (?:(?:es|das|dir|mir|die|den|ihn|sie|uns|euch)\s+){0,2}(?:gespeichert|erstellt|gelöscht|verschoben|"
     r"umbenannt|geöffnet|geschlossen|eingestellt|gemerkt|notiert|kopiert|installiert|gesperrt)|wurde (?:jetzt )?"
     r"(?:erstellt|gelöscht|verschoben|umbenannt|gespeichert|geöffnet|geschlossen|gesetzt|eingestellt|kopiert|"
     r"installiert)|ist (?:jetzt )?(?:gespeichert|erstellt|gelöscht|geöffnet|geschlossen|eingestellt|stumm))\b",
     re.I)
+DISCLAIMER = {"en": "(Note: I didn't actually run any action for this.)",
+              "de": "(Hinweis: Dafür habe ich keine Aktion ausgeführt - es wurde nichts geändert.)"}
 NUDGE_CLAIM = ("(Check: you did not call any tool in this request, so nothing has been done yet. If the user asked "
                "for an action, call the right tool now. Otherwise answer again without claiming you did anything.)")
 
@@ -71,7 +73,7 @@ class Agent:
 
     def run(self, text: str, *, system: str, context: str, history: list[dict[str, Any]], task: Task,
             thinking: bool = False, trace: Trace | None = None,
-            on_content: Callable[[str], None] | None = None) -> AgentResult:
+            on_content: Callable[[str], None] | None = None, language: str = "en") -> AgentResult:
         marker = new_marker()
         user = {"role": "user", "content": user_message(text, context)}
         msgs = [{"role": "system", "content": system}, *history, user]
@@ -102,6 +104,9 @@ class Agent:
                     self._emit("agent.retry", reason="claim_without_tool", task_id=task.id)
                     continue
                 if out.answer:
+                    if nudged and not out.calls and _CLAIM.search(out.answer):
+                        # still claiming after the correction: tell the user the truth instead
+                        out.answer += " " + DISCLAIMER.get(language, DISCLAIMER["en"])
                     out.messages.append({"role": "assistant", "content": out.answer})
                     return out
                 # empty answer after tools: ask once for a spoken summary

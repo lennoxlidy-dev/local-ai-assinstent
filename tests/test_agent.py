@@ -133,5 +133,9 @@ def test_no_nudge_for_normal_answers_or_after_tools(ts):
     llm = ScriptedLLM(tools(call("volume", level=10)), answer("I've set the volume to 10%."))
     run(system, llm)
     assert len(llm.seen) == 2                                  # tool ran -> the claim is true, no nudge
-    llm = ScriptedLLM(answer("I've saved it."), answer("I've saved it."))   # stubborn model: only one nudge
-    assert run(system, llm).answer == "I've saved it." and len(llm.seen) == 2
+    llm = ScriptedLLM(answer("I've saved it."), answer("I've saved it."))   # stubborn model: only one nudge ...
+    res = run(system, llm)
+    assert len(llm.seen) == 2 and res.answer == "I've saved it. (Note: I didn't actually run any action for this.)"
+    llm = ScriptedLLM(answer("Gerne, ich habe mir notiert, dass X."), answer("Ich habe mir gemerkt, dass X."))
+    res = run(system, llm, language="de")                       # ... and the user is told the truth
+    assert res.answer.endswith("es wurde nichts geändert.)")

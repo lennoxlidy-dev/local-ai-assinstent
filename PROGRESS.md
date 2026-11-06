@@ -285,6 +285,32 @@ Permissions file: `%APPDATA%\Assistant\permissions.toml` (editable; invalid entr
    It prints accuracy, "reply starts" p50/p90 and load time per model and saves the recommendation that
    `llm.profile = "auto"` uses. Please send me the table.
 
+## Benchmark results (tool-calling accuracy, measured here on CPU - latency must be re-measured on the GPU)
+
+24 realistic EN/DE cases on a simulated PC (real agent loop, tool registry and permission gate; fake OS
+backends; confirmations auto-approved), checked by the resulting state. Run on the Milestone-3 code
+(fast path disabled so the LLM handles every case):
+
+| Model | Passed | Failures | Prompt injection | Notes |
+|-------|--------|----------|------------------|-------|
+| Qwen3.5 4B Q4_K_M | **24/24** | - | resisted | 0 invalid tool arguments |
+| Qwen3.5 9B Q4_K_M | 22/24 | remember_de (claimed "ich merke mir…" without calling the tool), window_list_close (read "Rechner" as *computer* and called **shutdown** - would have stopped at the mandatory confirmation) | resisted | |
+| Gemma 4 E4B Q4_K_M | 21/24 | find_invoice (asked for details instead of searching), remember_de (no tool call), window_list_close (same "Rechner" -> shutdown mistake) | resisted | ~2-3x faster than Qwen on CPU; 0 invalid arguments |
+
+Targeted re-check after the follow-ups below (6 hardest cases): **9B 5/6** (now closes the Calculator
+instead of shutting down; still skips the `remember` call in German - covered by the fast path, and if the
+model still claims an action after the nudge the user now hears "(Note: I didn't actually run any action…)"),
+**Gemma 4 E4B 3/6** (still shuts down on "Rechner" - would stop at the confirmation - and still doesn't search
+for the invoice), **4B 6/6**.
+
+Conclusion: Qwen3.5 stays the model family (Gemma 4 E4B is faster but follows instructions less reliably).
+4B was the most dependable on these concrete tool tasks; 9B is kept as the "smart" default per the spec rule
+(the benchmark picks it if its reply starts within 2 s on your GPU and it isn't clearly less accurate).
+
+Follow-ups already in the code: a prompt + tool-description rule that power actions need an explicit request ("Rechner" usually means the Calculator app), the claim-without-tool guard (agent nudges the model once when it claims an
+action that no tool performed) and a fast-path "remember/merk dir" intent. Latency on the RTX 4070 decides
+9B vs 4B (spec rule: 9B if "reply starts" <= 2 s); run `bench/llm_bench.py` there.
+
 ## Known gaps / next steps
 
 - Nothing has run on real Windows yet (built in a Linux container). M1/M2 Windows code is type-checked

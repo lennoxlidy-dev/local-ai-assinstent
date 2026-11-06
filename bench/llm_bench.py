@@ -9,8 +9,8 @@ For every model it starts llama-server, warms the prompt cache, runs each case
 gate, fake OS backends, auto-approved confirmations), checks the resulting state
 and records timings. Results go to %LOCALAPPDATA%\\Assistant\\bench\\; the
 recommendation in ``latest.json`` is what ``llm.profile = "auto"`` uses:
-the smart model if its median "reply starts" latency is <= 2 s and it is not less
-accurate than the fast model, otherwise the fast one.
+the smart model if its median "reply starts" latency is <= 2 s and it is not clearly
+less accurate than the fast model (more than ~2 of 24 cases), otherwise the fast one.
 """
 
 from __future__ import annotations
@@ -41,6 +41,7 @@ from assistant.testing.fakes import fake_platform  # noqa: E402
 from assistant.tools.runtime import build_tool_system, folder_aliases  # noqa: E402
 
 TARGET_REPLY_MS = 2000
+ACCURACY_TOLERANCE = 0.09
 
 
 def run_case(case, ctx, llm, verbose: bool) -> dict:
@@ -143,11 +144,13 @@ def recommend(summaries: dict[str, dict], smart: str, fast: str) -> tuple[str, s
     if f is None:
         return smart, f"{fast} was not benchmarked"
     p50 = s["reply_start_p50_ms"] or 10**9
-    if p50 <= TARGET_REPLY_MS and s["accuracy"] >= f["accuracy"]:
+    # spec: the smart model if it meets the latency target - unless it is clearly less accurate
+    # (more than ~2 of 24 cases worse; smaller differences are noise)
+    if p50 <= TARGET_REPLY_MS and s["accuracy"] >= f["accuracy"] - ACCURACY_TOLERANCE:
         return smart, f"{smart}: reply starts after {p50} ms (target {TARGET_REPLY_MS}), accuracy {s['accuracy']:.0%}"
     if p50 > TARGET_REPLY_MS:
         return fast, f"{smart} too slow here (reply starts after {p50} ms > {TARGET_REPLY_MS} ms)"
-    return fast, f"{fast} was as accurate ({f['accuracy']:.0%} vs {s['accuracy']:.0%}) and faster"
+    return fast, f"{smart} was clearly less accurate ({s['accuracy']:.0%} vs {f['accuracy']:.0%})"
 
 
 def main() -> int:
@@ -180,7 +183,8 @@ def main() -> int:
     for s in summaries.values():
         print(f"{s['model']:<18} {s['passed']:>2}/{s['cases']:<2} {s['accuracy']:>4.0%}   "
               f"{s['reply_start_p50_ms'] or 0:>6} / {s['reply_start_p90_ms'] or 0:<6} ms  {s['total_p50_ms']:>7} ms"
-              f"  {s['invalid_args']:>6}        {'ok' if s['injection_resisted'] else 'FAILED':<9}  "
+              f"  {s['invalid_args']:>6}        "
+              f"{'-' if s['injection_resisted'] is None else 'ok' if s['injection_resisted'] else 'FAILED':<9}  "
               f"{s['load_ms'] / 1000:.1f} s")
     for s in summaries.values():
         fails = [r["id"] for r in s["results"] if not r["ok"]]

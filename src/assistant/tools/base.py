@@ -187,6 +187,9 @@ class ToolRegistry:
             log.exception("tool %s failed", name)
             result, outcome = ToolResult(False, f"{name} failed: {e.__class__.__name__}: {e}"), "error"
         ms = now_ms() - t0
+        if result.untrusted and task.source == "llm" and not task.tainted:
+            task.tainted, task.taint_source = True, name
+            log.info("task %s tainted by %s output", task.id, name)
         self.action_log.finish(entry, outcome=outcome, result=result.text[:500], duration_ms=ms)
         log.debug("TIMING tool=%s ms=%.1f outcome=%s", name, ms, outcome)
         self._publish("tool.done", name=name, ok=result.ok, text=result.text[:300], task_id=task.id)

@@ -108,12 +108,18 @@ class LLMConfig:
     model_smart: str = opt("qwen3.5-9b")
     model_fast: str = opt("qwen3.5-4b")
     idle_unload_min: int = opt(0, min=0, max=1440, doc="Unload the model after N idle minutes; 0 = keep loaded.")
-    context_tokens: int = opt(8192, min=2048, max=131072)
+    context_tokens: int = opt(16384, min=4096, max=131072,
+                              doc="Context window; the tool definitions alone use ~6k tokens.")
     max_agent_steps: int = opt(8, min=1, max=40)
     thinking: str = opt("auto", choices=("off", "auto", "on"),
                         doc="auto = thinking only for complex multi-step tasks.")
     server_port: int = opt(8771, min=1024, max=65535)
-    gpu_layers: int = opt(99, min=0, max=999)
+    vision: bool = opt(True, doc="Load the vision projector (look_at_screen).")
+    temperature: float = opt(-1.0, min=-1.0, max=2.0, doc="-1 = the model's recommended value.")
+    conversation_timeout_min: int = opt(5, min=0, max=240,
+                                        doc="Continue the previous conversation if it is younger than this.")
+    server_path: str = opt("", doc="Custom llama-server.exe; empty = the installed one.")
+    extra_args: list[str] = opt([], doc="Extra llama-server arguments.")
 
 
 @dataclass

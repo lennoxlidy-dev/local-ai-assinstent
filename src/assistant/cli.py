@@ -69,11 +69,57 @@ class DebugCLI:
         self.commands: dict[str, tuple[Command, str]] = {}
         self.text_handler: Callable[[str], None] | None = None
         self._tools = tools
+        self._assistant: Any = None
+        self._streamed = False
         self.raw_args = ""
         ctx.bus.subscribe("ui.notify", lambda e: self.print(
             f"\n[notification] {e.data.get('title', '')}: {e.data.get('message', '')}"))
         self._register_builtin()
         self._register_tools()
+
+    @property
+    def assistant(self) -> Any:
+        """The full assistant (fast path + LLM agent), built on first use."""
+        if self._assistant is None:
+            from .core.assistant import Assistant
+            from .llm.service import LlmService
+
+            self._assistant = Assistant(self.ctx, self.tools, LlmService(self.ctx))
+            self.ctx.bus.subscribe("agent.tool", self._on_tool_event)
+            self.ctx.bus.subscribe("llm.state", lambda e: self.print(f"  (model {e.data['state']}: {e.data['detail']})")
+                                   if e.data["state"] in ("starting", "failed") else None)
+        return self._assistant
+
+    def _on_tool_event(self, e: Any) -> None:
+        d = e.data
+        if d.get("phase") == "start":
+            args = json.dumps(d.get("args", {}), ensure_ascii=False)
+            self.print(f"\n  -> {d['name']} {args[:160]}")
+        else:
+            self.print(f"     {'ok' if d.get('ok') else 'FAILED'}: {d.get('text', '')[:160]}")
+
+    def ask(self, text: str) -> None:
+        """Free text: run it through the assistant, streaming the answer."""
+        name = self.ctx.config.data.general.assistant_name.lower()
+        self._streamed = False
+
+        def stream(delta: str) -> None:
+            if not self._streamed:
+                self.out.write(f"{name}> ")
+                self._streamed = True
+            self.out.write(delta)
+            self.out.flush()
+
+        reply = self.assistant.handle(text, source="cli", on_content=stream)
+        if self._streamed:
+            self.print()
+            if reply.via != "llm":
+                self.print(f"{name}> {reply.text}")
+        else:
+            self.print(f"{name}> {reply.text}")
+        t = reply.timings
+        first = f", first token {t['input>llm_first_token']:.0f} ms" if "input>llm_first_token" in t else ""
+        self.print(f"  [{reply.via}{(':' + reply.intent) if reply.intent else ''} in {t.get('total', 0):.0f} ms{first}]")
 
     @property
     def tools(self) -> Any:
@@ -134,10 +180,10 @@ class DebugCLI:
             except (ConfigError, KeyError, ValueError) as e:
                 self.print(f"! {e.__class__.__name__}: {e}")
             return True
-        if self.text_handler is None:
-            self.print("(the text/intent pipeline arrives in milestone 3 - try :help)")
-        else:
+        if self.text_handler is not None:
             self.text_handler(line)
+        else:
+            self.ask(line)
         return True
 
     # ------------------------------------------------------------------ built-in commands
@@ -290,3 +336,58 @@ class DebugCLI:
                 self.print(f"  #{t.id} {t.kind} '{t.label}' at {due} ({int(t.remaining_s)} s left)")
             if not pending:
                 self.print("  (none)")
+
+        # ---------------------------------------------------------------- assistant / LLM (milestone 3)
+        @self.command("fast", "show what the fast path makes of a sentence (nothing is executed)")
+        def _fast(args: list[str]) -> None:
+            fi = self.assistant.fastpath.match(self.raw_args)
+            if fi is None:
+                self.print("  no fast-path match -> the LLM would handle it")
+            else:
+                self.print(f"  intent={fi.intent} tool={fi.tool} args={json.dumps(fi.args, ensure_ascii=False)}"
+                           + (f" answer={fi.answer!r}" if fi.answer else ""))
+
+        @self.command("new", "start a new conversation (forget the current context)")
+        def _new(args: list[str]) -> None:
+            self.assistant.new_conversation()
+            self.print("  new conversation")
+
+        @self.command("history", "list/search saved conversations: :history [search words]")
+        def _history(args: list[str]) -> None:
+            store = self.assistant.conversations
+            if args:
+                for conv, snip in store.search(self.raw_args, 20):
+                    self.print(f"  #{conv.id} {conv.title}  …{snip}")
+            else:
+                for conv in store.recent(20):
+                    when = dt.datetime.fromtimestamp(conv.updated).strftime("%m-%d %H:%M")
+                    self.print(f"  #{conv.id} {when} {conv.title}")
+
+        @self.command("llm", "language model: :llm status|start|stop|models|use <id>")
+        def _llm(args: list[str]) -> None:
+            from .llm.models import CATALOG, is_installed
+
+            svc = self.assistant.llm
+            sub = args[0] if args else "status"
+            if sub == "status":
+                self.print(f"  {svc.status()}")
+                if svc.spec:
+                    self.print(f"  model: {svc.spec.title} ({svc.reason})")
+            elif sub == "start":
+                svc.start(wait=True)
+                self.print(f"  {svc.status()}")
+            elif sub == "stop":
+                svc.stop()
+                self.print("  stopped (VRAM freed)")
+            elif sub == "models":
+                for m in CATALOG.values():
+                    if m.hidden:
+                        continue
+                    have = "installed" if is_installed(m, self.ctx.paths.models_dir, vision=False) else \
+                        f"{m.download_bytes / 2**30:.1f} GB to download"
+                    self.print(f"  {m.id:<16} {m.title:<46} {have}")
+            elif sub == "use" and len(args) == 2:
+                svc.switch_model(args[1])
+                self.print(f"  now using {svc.spec.title}")
+            else:
+                raise ValueError("usage: :llm status|start|stop|models|use <id>")

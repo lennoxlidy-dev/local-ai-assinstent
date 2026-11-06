@@ -8,8 +8,8 @@ Living status file. Read this first when continuing in a new session (together w
 |---|-----------|--------|
 | 1 | Skeleton: config in %APPDATA%, logging, tray, autostart, text-mode debug CLI | ✅ done (tested on Linux; Windows test pending by user) |
 | 2 | Tools + permission gate + action log, unit tests with mocked destructive actions | ✅ done (146 tests; Windows backends type-checked, not yet run on Windows) |
-| 3 | LLM server management (llama.cpp), tool-calling agent loop, fast-path intents | ⏳ next |
-| 4 | Voice: mic → wake word → VAD → STT → popup, then TTS; WAV test harness | — |
+| 3 | LLM server management (llama.cpp), tool-calling agent loop, fast-path intents | ✅ done (tested with real llama.cpp + Qwen3.5/Gemma 4 on CPU; GPU latency pending) |
+| 4 | Voice: mic → wake word → VAD → STT → popup, then TTS; WAV test harness | ⏳ next |
 | 5 | Onboarding wizard + profile/memory | — |
 | 6 | Settings/permissions GUI + history | — |
 | 7 | Performance tuning, game mode, packaging (install.ps1/.bat/.exe), README | — |
@@ -18,8 +18,8 @@ Living status file. Read this first when continuing in a new session (together w
 
 ```
 src/assistant/
-  __main__.py          entry point: tray (default) | --cli | --debug | --smoke-test N | --home DIR
-  cli.py               text-mode debug CLI (":" commands; free text -> pipeline from M3)
+  __main__.py          entry point: tray (default) | --cli | --setup [--models ids] | --debug | --smoke-test N | --home DIR
+  cli.py               text-mode debug CLI (":" commands; free text -> the assistant)
   core/
     paths.py           %APPDATA%\Assistant (config, db) + %LOCALAPPDATA%\Assistant (models, bin, logs, cache)
     config.py          typed dataclass config <-> TOML; validation, atomic save, unknown keys preserved
@@ -32,17 +32,31 @@ src/assistant/
     autostart.py       HKCU Run key, respects/clears Task Manager "disabled" flag
     hardware.py        RAM/CPU (psutil, registry) + NVIDIA VRAM via NVML (ctypes) -> nvidia-smi fallback
     proc.py            run_hidden(): subprocesses with CREATE_NO_WINDOW (no console flashes)
+    assistant.py       the brain: text -> fast path | LLM agent; context line, history, conversations, stop/cancel
   win/shell.py         AppUserModelID, per-monitor DPI awareness (CLI), open_path()
   ui/
     app.py             QApplication bootstrap, theme, config file watcher, single instance
     tray.py            tray icon + menu (settings, pause, game mode, start at login, folders, quit)
     icons.py           orb icons drawn at runtime (accent color, paused bars, game-mode badge)
     single_instance.py QLockFile + per-user QLocalServer (2nd launch -> "show" to the 1st)
+    confirm.py         permission questions as an always-on-top dialog (until the popup, M4)
   permissions/
     policy.py          capabilities (allow/ask/block), risks, folder rules, permissions.toml
     pathrules.py       Windows path canonicalization (ntpath; junction/8.3/ADS/device-path proof) + rule matching
     gate.py            PermissionGate.evaluate/authorize, Confirmer protocol, Task (cancel token + grants)
-  storage/             SQLite (WAL): action_log, facts, routines, timers (+ conversations in M3)
+  storage/             SQLite (WAL): action_log, facts, routines, timers, conversations (+FTS5 search)
+  llm/
+    models.py          model catalog (HF repo, file, size, SHA-256, sampling, thinking switch), choose_model()
+    download.py        resumable + SHA-256-verified downloads (stdlib)
+    setup.py           llama.cpp Windows release picker/installer (CUDA 13.5 if driver>=580, else 12.4; Vulkan/CPU)
+    server.py          llama-server process: hidden, API key via env, job object, health wait, crash restart
+    client.py          streaming OpenAI-compatible client (http.client): content/reasoning/tool-call deltas, cancel
+    prompts.py         EN/DE system prompt, live context line, untrusted-data markers, thinking heuristic
+    agent.py           multi-step tool loop, step limit, loop detection, FAILED marking, think-tag filter
+    service.py         LlmService: model selection, start/stop/warm-up, chat() with per-model sampling, vision
+    vision.py          look_at_screen tool (vision model; last resort after UIA and OCR)
+  intents/             fast path: numbers.py (EN/DE number words), fastpath.py (anchored EN/DE patterns)
+  testing/fakes.py     fake OS backends (shared by tests and the benchmark)
   tools/
     base.py            Tool/Plan/ToolResult, ToolRegistry.invoke = validate -> plan -> gate -> log -> run -> log
     schema.py          tiny JSON-schema DSL (strict schema for the LLM, validation before every call)
@@ -60,8 +74,9 @@ src/assistant/
                        send2trash IFileOperation, Everything SDK, SHGetKnownFolderPath)
     inputs.py          SendInput (fixed-width ctypes structs, unit-tested layout)
     com.py             per-thread COM init; WinRT worker thread (MTA + asyncio)
-tests/                 pytest (146 tests) + fakes.py (fake OS backends)
-scripts/               dev-setup.ps1, run-tray.bat, run-debug.bat, run-cli.bat
+tests/                 pytest (~235 tests; test_llm_integration.py runs a real llama-server if available)
+bench/                 llm_bench.py + cases.py: GPU latency + tool-calling accuracy per model
+scripts/               dev-setup.ps1, setup-models.bat, run-tray.bat, run-debug.bat, run-cli.bat
 ```
 
 ## Decisions & defaults (with reasons)
@@ -141,6 +156,44 @@ Milestone 2 decisions:
   background-priority thread (low CPU *and* I/O priority), else a bounded folder scan.
 - **COM/WinRT threading**: classic COM per thread (STA); WinRT (SMTC, OCR) on one MTA worker thread.
 
+Milestone 3 decisions:
+
+- **llama.cpp, not Ollama**: Ollama can't load these Qwen3.5 GGUFs with their separate vision files, and we need
+  llama-server features directly: per-request thinking switch, prompt cache, `--sleep-idle-seconds`, MTP
+  speculative decoding, `--fit`. The app manages the process itself (hidden, random API key passed via env so
+  browser pages can't use the model, Windows job object so it dies with us, crash restart with backoff).
+- **Models (verified on Hugging Face, Nov 2026, all Apache-2.0)**: default smart = **Qwen3.5 9B Q4_K_M**
+  (5.3 GB + 0.9 GB vision), fast = **Qwen3.5 4B Q4_K_M** (2.6 GB + 0.6 GB). Alternatives in the catalog:
+  Gemma 4 E4B, Granite 4.2 8B (text only), Ministral 3 8B, and Qwen3.5 9B **MTP** (multi-token prediction,
+  `--spec-type draft-mtp`, experimental: faster decoding). Qwen3.6 exists only at 27B/35B - too big for 8 GB.
+  `profile = "auto"` uses the benchmark's recommendation, else picks by free VRAM.
+- **Thinking**: Qwen3.5 small models have thinking *off by default*; we enable it per request
+  (`chat_template_kwargs.enable_thinking`) only when a heuristic sees a complex/multi-step request
+  (`llm.thinking = auto|on|off`).
+- **Prompt cache layout**: Qwen3.5's template puts the ~5k-token tool block *before* the system text, then
+  history, then the new user turn. Time/active window/desktop go into a one-line context prefix on the user
+  turn, so a request only processes its own ~50-150 tokens (measured: `cache_n=5778, prompt_n=64`).
+  A new remembered fact only re-processes the system text (~700 tokens), never the tool block. The server is
+  warmed up once at start. Default context: 16k tokens.
+- **Prompt injection, enforced in code**: tool output from files/clipboard/screen/commands is wrapped in
+  per-task random markers (`<<DATA-xxxxxx …>>`; look-alike markers inside the data are neutralized) and the
+  task becomes *tainted*: from then on every side-effecting capability (write/move/delete files, terminal,
+  input, opening apps/URLs, memory, routines, clipboard writes, power, installs, admin) asks for confirmation
+  even if set to "allow", and "for this task"/"always" answers are not offered.
+- **Failures can't be misread**: failed/declined/blocked tool results reach the model as
+  `FAILED (nothing was done): …` (a 4B model once claimed "deleted anyway" before this).
+- **Fast path**: anchored full-sentence EN/DE patterns (volume, media, play X, open/close app, timers,
+  reminders, time/date, lock, desktops, brightness, stop) + number words ("fünfundzwanzig", "forty-five",
+  "halbe Stunde"); slots are validated (the app must exist), everything else goes to the LLM. Replies are
+  localized. "play music" with no player running falls back to opening your music app and pressing play.
+  Measured 1-3 ms (+ tool time). Windows app names in both languages are aliases (Editor = Notepad, ...).
+- **Conversations**: same conversation continues for `llm.conversation_timeout_min` (5) minutes; history is
+  trimmed by whole turns to ~16k chars; saved to SQLite with FTS5 search unless `privacy.save_conversations`
+  is off; retention purge at start.
+- **Idle/VRAM**: `llm.idle_unload_min` -> llama-server sleeps (frees the model) and reloads on the next
+  request. The tray's *Game mode* toggle stops the server immediately (VRAM free) and reloads afterwards.
+  Vision projector is moved to the CPU automatically when VRAM is tight.
+
 ## How to test
 
 ### Automated (any OS)
@@ -209,6 +262,29 @@ uv run pytest
 
 Permissions file: `%APPDATA%\Assistant\permissions.toml` (editable; invalid entries fall back to safe defaults).
 
+### Milestone 3 on Windows
+
+1. Download llama.cpp + models (once, ~10 GB; resumable, checksums verified):
+   `scripts\setup-models.bat`  (or a single model: `.venv\Scripts\python -m assistant --setup --models qwen3.5-4b`)
+2. `scripts\run-cli.bat`, then just type:
+   - fast path (instant): `set the volume to 30`, `Lautstärke auf 40`, `nächstes Lied`, `wie spät ist es`,
+     `timer for 5 minutes`, `open notepad`, `schließe den Editor`, `switch to desktop 2`, `stop`
+   - LLM (first request after start loads the model, ~5-15 s): `What's my IP address?`,
+     `Find my newest PDF in Downloads and tell me its name`, `Remember that my sister's name is Lea`,
+     `Erstelle auf dem Desktop eine Datei einkauf.txt mit Milch, Eier, Brot` (asks first),
+     `Summarize the file Documents\<something>.docx`, `What is on my screen right now?` (vision)
+   - `:fast <sentence>` shows what the fast path would do, `:llm status`, `:llm models`, `:llm use qwen3.5-4b`,
+     `:history`, `:history <words>`, `:new`, `:log 20`
+   - each answer shows how it was handled and the time, e.g. `[fast:volume.set in 4 ms]`,
+     `[llm in 1840 ms, first token 420 ms]`
+3. Tray: right-click -> **Type a request…** (answers appear as notifications; permission questions as a dialog).
+   Hover the icon: "(model loading…)" while it starts. *Game mode* unloads the model (check Task Manager -> GPU).
+4. Benchmark on your GPU (≈5-10 min per model):
+   `uv run python bench/llm_bench.py` (smart + fast) or
+   `uv run python bench/llm_bench.py --models qwen3.5-9b,qwen3.5-4b,gemma-4-e4b,qwen3.5-9b-mtp`
+   It prints accuracy, "reply starts" p50/p90 and load time per model and saves the recommendation that
+   `llm.profile = "auto"` uses. Please send me the table.
+
 ## Known gaps / next steps
 
 - Nothing has run on real Windows yet (built in a Linux container). M1/M2 Windows code is type-checked
@@ -217,4 +293,6 @@ Permissions file: `%APPDATA%\Assistant\permissions.toml` (editable; invalid entr
   Spotify UI automation, focus stealing rules, pyvda on your exact build, and WMI brightness.
 - TODO later: Spotify Web API (optional own credentials), Windows Search as a middle search tier,
   vision-based clicking (M3), panic hotkey wiring (M4), timers/notifications in the tray app (M3/M4).
-- Next: M3 - llama.cpp server management, agent loop with tool calling, fast-path intents.
+- M3 open points: GPU latency targets (reply starts < 2 s, fast path < 1 s) must be measured on your laptop with
+  the benchmark; Spotify Web API still TODO; the popup with streaming text arrives in M4.
+- Next: M4 - voice pipeline (mic -> wake word -> VAD -> STT -> popup, TTS) with a WAV test harness.

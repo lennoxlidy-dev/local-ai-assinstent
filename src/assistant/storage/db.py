@@ -55,6 +55,38 @@ MIGRATIONS: list[str] = [
         done INTEGER NOT NULL DEFAULT 0
     );
     """,
+    # v2 (milestone 3): conversations with full-text search
+    """
+    CREATE TABLE conversations(
+        id INTEGER PRIMARY KEY,
+        title TEXT NOT NULL DEFAULT '',
+        started REAL NOT NULL,
+        updated REAL NOT NULL,
+        language TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX conversations_updated ON conversations(updated);
+    CREATE TABLE messages(
+        id INTEGER PRIMARY KEY,
+        conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        ts REAL NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        meta TEXT
+    );
+    CREATE INDEX messages_conversation ON messages(conversation_id, id);
+    CREATE VIRTUAL TABLE messages_fts USING fts5(content, content='messages', content_rowid='id',
+                                                 tokenize='unicode61 remove_diacritics 2');
+    CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
+        INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+    END;
+    CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
+        INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.id, old.content);
+    END;
+    CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
+        INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.id, old.content);
+        INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+    END;
+    """,
 ]
 
 
@@ -78,10 +110,12 @@ class Database:
             version = self.conn.execute("PRAGMA user_version").fetchone()[0]
             for i in range(version, len(MIGRATIONS)):
                 log.info("database: migrating to schema v%d", i + 1)
-                with self.transaction():
-                    for stmt in _split_sql(MIGRATIONS[i]):
-                        self.conn.execute(stmt)
-                    self.conn.execute(f"PRAGMA user_version={i + 1}")
+                try:
+                    self.conn.executescript(f"BEGIN IMMEDIATE;\n{MIGRATIONS[i]}\nPRAGMA user_version={i + 1};\nCOMMIT;")
+                except BaseException:
+                    if self.conn.in_transaction:
+                        self.conn.execute("ROLLBACK")
+                    raise
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -106,8 +140,3 @@ class Database:
     def close(self) -> None:
         with self._lock:
             self.conn.close()
-
-
-def _split_sql(script: str) -> list[str]:
-    """Split a migration script into statements (our migrations contain no ';' inside literals)."""
-    return [s.strip() for s in script.split(";") if s.strip()]

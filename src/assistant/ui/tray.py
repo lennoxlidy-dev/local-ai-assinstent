@@ -25,6 +25,7 @@ class TrayController(QObject):
     _bus_event = Signal(object)
     quit_requested = Signal()
     settings_requested = Signal()
+    ask_requested = Signal()
 
     def __init__(self, ctx: AppContext, parent: QObject | None = None):
         super().__init__(parent)
@@ -42,7 +43,9 @@ class TrayController(QObject):
             ctx.bus.subscribe(Topic.STATE_CHANGED, self._bus_event.emit),
             ctx.bus.subscribe(Topic.CONFIG_CHANGED, self._bus_event.emit),
             ctx.bus.subscribe(Topic.NOTIFY, self._bus_event.emit),
+            ctx.bus.subscribe("llm.state", self._bus_event.emit),
         ]
+        self.llm_state = ""
         self.refresh()
 
     # ------------------------------------------------------------------ menu
@@ -52,6 +55,10 @@ class TrayController(QObject):
         self.act_header.setEnabled(False)
         m.addAction(self.act_header)
         m.addSeparator()
+
+        self.act_ask = QAction("Type a request…", m)
+        self.act_ask.triggered.connect(self.ask_requested.emit)
+        m.addAction(self.act_ask)
 
         self.act_settings = QAction("Settings…", m)
         self.act_settings.triggered.connect(self.settings_requested.emit)
@@ -96,9 +103,10 @@ class TrayController(QObject):
             return f"{name} — paused"
         if s.game_mode:
             return f"{name} — game mode"
+        extra = f" ({self.llm_state})" if getattr(self, "llm_state", "") else ""
         if s.voice_ready:
-            return f"{name} — listening for “{name}”"
-        return f"{name} — ready"
+            return f"{name} — listening for “{name}”{extra}"
+        return f"{name} — ready{extra}"
 
     def refresh(self) -> None:
         s = self.ctx.state
@@ -116,6 +124,11 @@ class TrayController(QObject):
 
     @Slot(object)
     def _on_bus_event(self, event: Event) -> None:
+        if event.topic == "llm.state":
+            self.llm_state = {"starting": "model loading…", "ready": "", "failed": "model unavailable",
+                              "stopped": "model unloaded"}.get(event.data.get("state", ""), "")
+            self.refresh()
+            return
         if event.topic == Topic.NOTIFY:
             self.notify(event.data.get("title", ""), event.data.get("message", ""),
                         event.data.get("level", "info"))
@@ -144,6 +157,10 @@ class TrayController(QObject):
             self.notify("Could not open folder", str(e), "warning")
 
     def notify(self, title: str, message: str, level: str = "info") -> None:
+        if level == "alarm":  # timers/reminders: make them noticeable
+            from PySide6.QtWidgets import QApplication
+
+            QApplication.beep()
         icon = {"warning": QSystemTrayIcon.MessageIcon.Warning,
                 "error": QSystemTrayIcon.MessageIcon.Critical}.get(level, QSystemTrayIcon.MessageIcon.Information)
         if self.available and self.tray.isVisible():

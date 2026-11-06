@@ -28,6 +28,21 @@ UNSAVED_MARKERS = re.compile(r"(^\*|\s\*\s|\*\s*[-–—|]|\*$|●|•|\(modifie
                              r"\(geändert\)|\(bearbeitet\))", re.I)
 
 
+#: Windows app names differ between English and German installs ("Notepad" vs "Editor").
+BUILTIN_ALIASES = {
+    "editor": "notepad", "notepad": "editor", "rechner": "calculator", "calculator": "rechner",
+    "taschenrechner": "calculator", "explorer": "file explorer", "datei-explorer": "file explorer",
+    "file explorer": "datei-explorer", "einstellungen": "settings", "settings": "einstellungen",
+    "eingabeaufforderung": "command prompt", "command prompt": "eingabeaufforderung", "cmd": "command prompt",
+    "terminal": "windows terminal", "powershell": "windows powershell", "fotos": "photos", "photos": "fotos",
+    "kalender": "calendar", "calendar": "kalender", "uhr": "clock", "wecker": "clock", "clock": "uhr",
+    "kamera": "camera", "camera": "kamera", "task manager": "task-manager", "task-manager": "task manager",
+    "systemsteuerung": "control panel", "control panel": "systemsteuerung", "karten": "maps", "maps": "karten",
+    "aufnahme": "sound recorder", "sprachrekorder": "sound recorder", "ausschneiden und skizzieren": "snipping tool",
+    "snipping tool": "ausschneiden und skizzieren", "mail": "outlook", "edge": "microsoft edge",
+}
+
+
 def norm_name(s: str) -> str:
     s = unicodedata.normalize("NFKC", s).casefold()
     s = re.sub(r"[®™©]", "", s)
@@ -54,6 +69,9 @@ class AppMatcher:
         if not q or not self.apps:
             return None, []
         exact = [a for a, n in zip(self.apps, self._names, strict=True) if n == q]
+        if not exact and q in BUILTIN_ALIASES:
+            alt = BUILTIN_ALIASES[q]
+            exact = [a for a, n in zip(self.apps, self._names, strict=True) if n == alt]
         if exact:
             return min(exact, key=lambda a: a.kind != "desktop"), exact[1:]
         starts = [a for a, n in zip(self.apps, self._names, strict=True) if n.startswith(q + " ") or n == q]
@@ -447,8 +465,8 @@ def register(reg: ToolRegistry) -> None:
             target=Str("App name or window title; empty = the active window", max_len=200)),
         "apps.windows", _plan_window, _run_window))
     reg.register(Tool(
-        "desktop", "Virtual desktops: list, switch (number/name/next/previous/assistant), create, move the "
-                   "active window to another desktop.",
+        "desktop", "Windows virtual desktops: list, switch, create, or move the active window to another desktop.",
         obj(("action",), action=Str("What to do", enum=("list", "switch", "create", "move_window")),
-            target=Str("Desktop number, name, 'next', 'previous' or 'assistant'", max_len=60)),
+            target=Str("Which desktop: its number as digits ('1', '2' = second desktop ...), its name, 'next', "
+                       "'previous', or 'assistant' ONLY for the dedicated Assistant desktop", max_len=60)),
         "desktops", _plan_desktop, _run_desktop))

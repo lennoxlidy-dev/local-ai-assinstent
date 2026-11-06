@@ -25,6 +25,14 @@ from .policy import CAPS_BY_ID, LEVEL_ORDER, RISK_TITLES, Level, PolicyStore, Ri
 log = logging.getLogger(__name__)
 
 
+#: Capabilities that change something or can leak data. After the LLM has read untrusted
+#: content, these always ask (even if set to "allow") - enforced here, not in the prompt.
+SIDE_EFFECT_CAPS = frozenset({
+    "apps.open", "apps.close", "files.write", "files.modify", "files.delete", "terminal.run",
+    "software.install", "system.admin", "system.power", "input", "memory", "routines", "system.clipboard",
+})
+
+
 class ConfirmChoice(StrEnum):
     ONCE = "once"
     TASK = "task"      # allow this capability for the rest of the current task
@@ -103,6 +111,10 @@ class Task:
     cancel: CancelToken = field(default_factory=CancelToken)
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     granted: set[str] = field(default_factory=set)
+    #: set once the LLM has seen untrusted content (file/screen/web/command output) in this task.
+    #: From then on every side-effecting action needs a fresh confirmation (prompt-injection defense).
+    tainted: bool = False
+    taint_source: str = ""
 
 
 @dataclass
@@ -150,14 +162,19 @@ class PermissionGate:
                 level = stricter(level, pl)
 
         risky = any(pol.needs_confirm(r) for r in action.risks)
+        tainted = task is not None and task.tainted and action.capability in SIDE_EFFECT_CAPS
         if risky:
             level = stricter(level, Level.ASK)
             reasons.append("risky: " + "; ".join(RISK_TITLES[r] for r in sorted(action.risks)
                                                   if pol.needs_confirm(r)))
-        elif level is Level.ASK and task is not None and action.capability in task.granted:
+        if tainted:
+            level = stricter(level, Level.ASK)
+            reasons.append(f"the assistant read untrusted content ({task.taint_source}) in this task, "  # type: ignore[union-attr]
+                           "so it must not act on its own")
+        elif not risky and level is Level.ASK and task is not None and action.capability in task.granted:
             level = Level.ALLOW
             reasons.append("approved earlier in this task")
-        return Decision(level, reasons, risky)
+        return Decision(level, reasons, risky or tainted)
 
     # ------------------------------------------------------------------ with the human in the loop
     def authorize(self, action: Action, task: Task) -> AuthResult:

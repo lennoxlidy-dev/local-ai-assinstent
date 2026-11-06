@@ -19,7 +19,7 @@ def test_cli_commands(home):
     assert "voice.follow_up = false" in out
     assert "must be <= 40" in out
     assert "unknown command :nope" in out
-    assert "milestone 3" in out
+    assert "jarvis> " in out and "[fast:media.play" in out   # free text -> assistant (fast path)
     assert "ram " in out
     assert ctx.config.data.voice.follow_up is False
 

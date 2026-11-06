@@ -7,7 +7,9 @@ import signal
 import sys
 from typing import Any
 
-from PySide6.QtCore import QFileSystemWatcher, Qt, QTimer, QtMsgType, qInstallMessageHandler
+import threading
+
+from PySide6.QtCore import QFileSystemWatcher, QObject, Qt, QTimer, QtMsgType, Signal, qInstallMessageHandler
 from PySide6.QtWidgets import QApplication
 
 from .. import APP_ID, APP_USER_MODEL_ID, __version__
@@ -35,8 +37,11 @@ def apply_theme(app: QApplication, theme: str) -> None:
         hints.setColorScheme(scheme)
 
 
-class TrayApp:
+class TrayApp(QObject):
+    _answer = Signal(str, bool)
+
     def __init__(self, ctx: AppContext, app: QApplication, *, autostarted: bool = False):
+        super().__init__()
         self.ctx = ctx
         self.app = app
         self.autostarted = autostarted
@@ -50,14 +55,67 @@ class TrayApp:
         self._reload_timer = QTimer(singleShot=True, interval=300)
         self._reload_timer.timeout.connect(self._reload_config)
 
+        self.tools = None
+        self.assistant = None
+        self.llm = None
+        self.tray.ask_requested.connect(self.ask_dialog)
+        self._answer.connect(self._show_answer)
+        ctx.bus.subscribe(Topic.STATE_CHANGED, self._on_state_changed)
+
+    def _on_state_changed(self, event) -> None:  # type: ignore[no-untyped-def]
+        """Game mode frees the GPU: stop the model now, reload when game mode ends."""
+        changed = event.data.get("changed", {})
+        if "game_mode" not in changed or self.llm is None:
+            return
+        llm = self.llm
+        if changed["game_mode"]:
+            threading.Thread(target=llm.stop, name="llm-stop", daemon=True).start()
+            self.ctx.bus.publish(Topic.NOTIFY, title="Game mode", message="Language model unloaded - VRAM is free.")
+        else:
+            llm.start_background()
+
     def start(self) -> None:
         self.tray.show()
         self.ctx.apply_autostart()
         for w in self.ctx.config.warnings:
             self.ctx.bus.publish(Topic.NOTIFY, title="Settings problem", message=w, level="warning")
         log.info("tray ready (system tray available: %s)", self.tray.available)
-        # Milestones 3/4 start the LLM server and the voice pipeline here
-        # (deferred by general.startup_delay_s when launched at login).
+        # Heavy init (tool system, model) after the tray is visible; delayed when launched at login.
+        delay = self.ctx.config.data.general.startup_delay_s if self.autostarted else 0.0
+        QTimer.singleShot(int(delay * 1000), self._init_assistant)
+
+    def _init_assistant(self) -> None:
+        from ..core.assistant import Assistant
+        from ..llm.service import LlmService
+        from ..tools.runtime import build_tool_system
+        from .confirm import GuiConfirmer
+
+        self.confirmer = GuiConfirmer(self.ctx.config.data.general.assistant_name)
+        self.tools = build_tool_system(self.ctx, confirmer=self.confirmer)
+        self.llm = LlmService(self.ctx)
+        self.assistant = Assistant(self.ctx, self.tools, self.llm)
+        self.llm.start_background()
+        log.info("assistant ready (LLM loading in the background)")
+
+    # ------------------------------------------------------------------ typed requests (until the popup, M4)
+    def ask_dialog(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+
+        if self.assistant is None:
+            self.tray.notify("", "Still starting up - try again in a moment.")
+            return
+        name = self.ctx.config.data.general.assistant_name
+        text, ok = QInputDialog.getText(None, name, f"What should {name} do?")
+        if ok and text.strip():
+            threading.Thread(target=self._run_request, args=(text,), name="request", daemon=True).start()
+
+    def _run_request(self, text: str) -> None:
+        assert self.assistant is not None
+        reply = self.assistant.handle(text, source="typed")
+        self._answer.emit(reply.text, reply.ok)
+
+    def _show_answer(self, text: str, ok: bool) -> None:
+        self.tray.notify(self.ctx.config.data.general.assistant_name, text, "info" if ok else "warning")
 
     # ------------------------------------------------------------------ handlers
     def on_message(self, msg: str) -> None:
@@ -84,6 +142,12 @@ class TrayApp:
     def quit(self) -> None:
         log.info("quit requested")
         self.ctx.bus.publish(Topic.SHUTDOWN)
+        if self.assistant is not None:
+            self.assistant.cancel("quit")
+        if self.llm is not None:
+            self.llm.stop()
+        if self.tools is not None:
+            self.tools.stop()
         self.tray.close()
         self.app.quit()
 

@@ -114,7 +114,7 @@ def test_desktop_tool(ts):
 def test_media(ts):
     system, p, conf, home = ts
     assert run(ts, "media", action="next").ok and p.media.commands == ["next"]
-    assert "Song by Band" in run(ts, "media", action="status").text
+    assert "Bohemian Rhapsody by Queen" in run(ts, "media", action="status").text
 
 
 def test_open_url_only_http(ts):
@@ -122,3 +122,10 @@ def test_open_url_only_http(ts):
     assert run(ts, "open_url", url="example.com").ok and p.apps.opened[-1] == "https://example.com"
     assert not run(ts, "open_url", url="file:///C:/Windows/System32/calc.exe").ok
     assert not run(ts, "open_url", url="javascript:alert(1)").ok
+
+
+def test_matcher_knows_german_and_english_windows_names():
+    m = AppMatcher([AppEntry("Notepad", "n"), AppEntry("Rechner", "r"), AppEntry("Einstellungen", "s")])
+    assert m.match("Editor")[0].name == "Notepad"
+    assert m.match("calculator")[0].name == "Rechner"
+    assert m.match("settings")[0].name == "Einstellungen"

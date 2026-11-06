@@ -6,3 +6,4 @@ bin/
 dist/
 build/
 *.log
+assistant-src*.zip

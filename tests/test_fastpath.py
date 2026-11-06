@@ -106,3 +106,13 @@ def test_reply_texts():
     assert timer_reply(3600, "de") == "Timer für 1 Stunde gestellt."
     assert spoken_date(dt.date(2026, 11, 6), "de") == "Heute ist Freitag, der 6. November."
     assert spoken_date(dt.date(2026, 11, 3), "en") == "Today is Tuesday, November 3rd."
+
+
+def test_remember_intent(fp):
+    fi = fp.match("Merk dir, dass mein Auto ein blauer Golf ist.")
+    assert (fi.tool, fi.args) == ("remember", {"fact": "Mein Auto ein blauer Golf ist"})
+    assert fp.match("Remember that my sister Lea lives in Köln").args == {"fact": "My sister Lea lives in Köln"}
+    assert fp.match("Jarvis, merke dir: Der WLAN-Schlüssel liegt in der Schublade").args["fact"] == \
+        "Der WLAN-Schlüssel liegt in der Schublade"
+    assert fp.match("remember to buy milk") is None            # a to-do, not a fact -> LLM
+    assert fp.match("remember that song we heard yesterday?") is None

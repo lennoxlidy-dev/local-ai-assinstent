@@ -31,6 +31,19 @@ log = logging.getLogger(__name__)
 MAX_TOOL_RESULT_CHARS = 6000
 _THINK_TAGS = re.compile(r"<think>.*?</think>\s*", re.S)
 
+#: An answer that claims a finished action. If no tool ran, the model made it up -> one corrective nudge.
+_CLAIM = re.compile(
+    r"\b(i(?:'ve| have) (?:saved|created|deleted|moved|renamed|opened|closed|set|muted|noted|remembered|started|"
+    r"turned|changed|copied|installed|locked)|i(?:'ll| will) remember|(?:has|have) been (?:saved|created|deleted|"
+    r"moved|renamed|opened|closed|set|muted|copied|installed)|is now (?:open|closed|set|muted|saved|on|off)|"
+    r"ich merke mir|ich habe (?:es |das |dir |die |den |ihn |sie )?(?:gespeichert|erstellt|gelöscht|verschoben|"
+    r"umbenannt|geöffnet|geschlossen|eingestellt|gemerkt|notiert|kopiert|installiert|gesperrt)|wurde (?:jetzt )?"
+    r"(?:erstellt|gelöscht|verschoben|umbenannt|gespeichert|geöffnet|geschlossen|gesetzt|eingestellt|kopiert|"
+    r"installiert)|ist (?:jetzt )?(?:gespeichert|erstellt|gelöscht|geöffnet|geschlossen|eingestellt|stumm))\b",
+    re.I)
+NUDGE_CLAIM = ("(Check: you did not call any tool in this request, so nothing has been done yet. If the user asked "
+               "for an action, call the right tool now. Otherwise answer again without claiming you did anything.)")
+
 
 @dataclass
 class AgentResult:
@@ -67,6 +80,7 @@ class Agent:
         seen: Counter[tuple[str, str]] = Counter()
         res: ChatResult | None = None
         on_content = ThinkFilter(on_content) if on_content is not None else None
+        nudged = False
 
         for step in range(1, self.max_steps + 1):
             task.cancel.check()
@@ -79,6 +93,14 @@ class Agent:
                     trace.mark("llm_first_token")
             if not res.tool_calls:
                 out.answer = clean_answer(res.content)
+                if out.answer and not out.calls and not nudged and step < self.max_steps \
+                        and _CLAIM.search(out.answer):
+                    # claimed an action without doing it (small models do this): correct it once
+                    log.info("answer claims an action but no tool ran; nudging the model")
+                    nudged = True
+                    msgs += [{"role": "assistant", "content": out.answer}, {"role": "user", "content": NUDGE_CLAIM}]
+                    self._emit("agent.retry", reason="claim_without_tool", task_id=task.id)
+                    continue
                 if out.answer:
                     out.messages.append({"role": "assistant", "content": out.answer})
                     return out

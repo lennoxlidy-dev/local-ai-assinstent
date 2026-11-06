@@ -149,6 +149,12 @@ REMIND = [P(r"remind me (in (?P<in>.+?)|at (?P<at>.+?)) (to|that|about) (?P<what
           P(r"remind me to (?P<what>.+?) (in (?P<in>.+)|at (?P<at>.+))"),
           P(r"erinnere? mich (in (?P<in>.+?)|um (?P<at>.+?)) (daran,? dass|daran,? |daran|an|dass) (?P<what>.+)")]
 
+REMEMBER = [P(r"(please )?remember:? (that |this:? )?(?P<fact>.{3,})"),
+            P(r"(don't|do not) forget:? (that )?(?P<fact>.{3,})"),
+            P(r"(merk|merke) (dir|euch):?( bitte)?:? (dass |das:? |folgendes:? )?(?P<fact>.{3,})"),
+            P(r"vergiss nicht,? (dass )?(?P<fact>.{3,})"),
+            P(r"speicher(e)? (dir )?,? dass (?P<fact>.{3,})")]
+
 LOCK = P(r"(lock( (the|my))?( (pc|computer|screen|laptop|workstation|windows))?|"
          r"(den |die |meinen )?(pc|computer|bildschirm|laptop|rechner) sperren|"
          r"sperr(e)? (den |die |meinen )?(pc|computer|bildschirm|laptop|rechner)|sperren|bildschirmsperre)")
@@ -267,6 +273,11 @@ class FastPath:
             if secs:
                 return FastIntent("timer.set", "timer", {"action": "set_timer", "seconds": secs},
                                   lambda res, lang: timer_reply(secs, lang))
+        if (m := _first(REMEMBER, t)) is not None and not m.group("fact").startswith(("to ", "zu ")) \
+                and not text.rstrip().endswith("?"):
+            fact = original_slot(text, m.group("fact"))
+            return FastIntent("memory.remember", "remember", {"fact": fact},
+                              _r("OK, I'll remember that.", "Okay, ich merke mir das."))
         if _full(LOCK, t):
             return FastIntent("lock", "power", {"action": "lock"}, _r("Locked.", "Gesperrt."))
         if (m := _first(DESKTOP, t)) is not None:
@@ -324,6 +335,18 @@ class FastPath:
         return FastIntent("reminder.set", "timer", {"action": "set_reminder", "at": at, "label": what},
                           lambda res, lang: res.text if lang != "de" else
                           f"Ich erinnere dich um {at[11:16]} Uhr: {what}.")
+
+
+def original_slot(text: str, slot: str) -> str:
+    """Recover a slot's original spelling (case, umlauts) from the raw text; fall back to the normalized slot."""
+    words = slot.split()
+    if not words:
+        return slot
+    pattern = r"\W+".join(re.escape(w) for w in words)
+    m = re.search(pattern, words_to_digits(text.lower()))
+    raw = text[m.start():m.end()] if m and len(words_to_digits(text.lower())) == len(text) else slot
+    raw = raw.strip(" ,.;:")
+    return raw[:1].upper() + raw[1:]
 
 
 def spoken_date(d: dt.date, lang: str) -> str:

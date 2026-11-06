@@ -114,3 +114,24 @@ def test_think_filter_and_clean_answer():
         f(piece)
     assert "".join(out) == "Visible text <thing>"
     assert clean_answer("<think>x</think>\nHello") == "Hello"
+
+
+def test_claimed_action_without_tool_gets_one_nudge(ts):
+    system, p, conf, home = ts
+    llm = ScriptedLLM(answer("Gerne, ich merke mir, dass dein Auto ein blauer Golf ist."),
+                      tools(call("remember", fact="Mein Auto ist ein blauer Golf")), answer("Gespeichert."))
+    res = run(system, llm, text="Merk dir das mit dem Auto")
+    assert res.answer == "Gespeichert." and [c["name"] for c in res.calls] == ["remember"]
+    assert "did not call any tool" in llm.seen[1][-1]["content"]
+    assert [f.text for f in system.services["memory"].all()] == ["Mein Auto ist ein blauer Golf"]
+
+
+def test_no_nudge_for_normal_answers_or_after_tools(ts):
+    system, p, conf, home = ts
+    llm = ScriptedLLM(answer("Ich habe einen Witz für dich: ..."))
+    assert run(system, llm).answer.startswith("Ich habe einen Witz") and len(llm.seen) == 1
+    llm = ScriptedLLM(tools(call("volume", level=10)), answer("I've set the volume to 10%."))
+    run(system, llm)
+    assert len(llm.seen) == 2                                  # tool ran -> the claim is true, no nudge
+    llm = ScriptedLLM(answer("I've saved it."), answer("I've saved it."))   # stubborn model: only one nudge
+    assert run(system, llm).answer == "I've saved it." and len(llm.seen) == 2

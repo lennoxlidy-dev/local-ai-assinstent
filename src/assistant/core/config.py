@@ -86,13 +86,21 @@ class VoiceConfig:
     push_to_talk_mode: str = opt("press", choices=("press", "hold"),
                                  doc="press: start on key press, stop on silence. hold: talk while held.")
     tts_enabled: bool = opt(True, doc="Speak answers aloud.")
-    tts_voice_en: str = opt("af_heart")
-    tts_voice_de: str = opt("thorsten")
+    tts_voice_en: str = opt("F1", choices=("F1", "F2", "F3", "F4", "F5", "M1", "M2", "M3", "M4", "M5"),
+                            doc="Supertonic voice for English (F = female, M = male).")
+    tts_voice_de: str = opt("F1", choices=("F1", "F2", "F3", "F4", "F5", "M1", "M2", "M3", "M4", "M5"),
+                            doc="Supertonic voice for German.")
     tts_speed: float = opt(1.0, min=0.5, max=2.0)
     chime: bool = opt(True, doc="Play a short sound when the wake word is heard.")
     input_device: str = opt("", doc="Microphone name; empty = Windows default.")
     output_device: str = opt("", doc="Speaker name; empty = Windows default.")
     voice_lock: bool = opt(False, doc="Only react to the enrolled speaker.")
+    voice_lock_threshold: float = opt(0.55, min=0.2, max=0.95, doc="Higher = stricter voice lock.")
+    wake_variants: list[str] = opt([], doc="Extra spellings of the name learned by calibration (e.g. 'Javis').")
+    live_transcript: bool = opt(True, doc="Show what you say while you are still speaking.")
+    stt_keep_loaded_min: int = opt(10, min=0, max=1440,
+                                   doc="Unload speech recognition + speech output (~1 GB RAM) after N idle "
+                                       "minutes; 0 = keep them loaded.")
 
 
 @dataclass
@@ -160,6 +168,7 @@ class AppearanceConfig:
     popup_position: str = opt("top-center", choices=(
         "top-left", "top-center", "top-right", "bottom-left", "bottom-center", "bottom-right"))
     popup_timeout_s: float = opt(6.0, min=1.0, max=60.0, doc="Fade out the popup after N seconds.")
+    popup_blur: bool = opt(True, doc="Acrylic (blurred) popup background on Windows 10/11.")
 
 
 @dataclass

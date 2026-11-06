@@ -23,6 +23,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--smoke-test", type=float, metavar="SECONDS", help="start, then quit after SECONDS")
     p.add_argument("--setup", action="store_true", help="download llama.cpp and the language models, then exit")
     p.add_argument("--models", metavar="IDS", help="with --setup: comma-separated model ids (default: smart + fast)")
+    p.add_argument("--voice-test", nargs="+", metavar="WAV", help="run WAV files through the voice pipeline")
+    p.add_argument("--speak-out", metavar="WAV", help="with --voice-test: save the spoken replies")
+    p.add_argument("--fast", action="store_true", help="with --voice-test: feed audio faster than real time")
+    p.add_argument("--say", metavar="TEXT", help="synthesize TEXT with the assistant's voice (needs --out)")
+    p.add_argument("--lang", default=None, help="language for --say (en|de; default: config)")
+    p.add_argument("--voice", default=None, help="voice for --say (F1..F5, M1..M5)")
+    p.add_argument("--out", metavar="WAV", help="output file for --say")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return p.parse_args(argv)
 
@@ -34,6 +41,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if args.setup:
         return run_setup(args)
+    if args.say or args.voice_test:
+        return run_voice_tools(args)
     if args.cli:
         return run_cli(args)
     from .ui.app import run_tray
@@ -83,6 +92,13 @@ def run_setup(args: argparse.Namespace) -> int:
             print(f"Downloading {spec.title} ({spec.download_bytes / 2**30:.1f} GB) ...")
             download_model(spec, ctx.paths.models_dir, vision=c.vision, progress=bar)
             print()
+        from .voice.models import CORE_VOICE, VOICE_MODELS, ensure
+
+        for vid in (*CORE_VOICE, "speaker"):
+            vm = VOICE_MODELS[vid]
+            print(f"Downloading {vm.title} ({vm.size / 2**20:.0f} MB) ...")
+            ensure(vid, ctx.paths.models_dir, ctx.paths.cache_dir, progress=bar)
+            print()
     except (DownloadError, OSError, RuntimeError, KeyError) as e:
         print(f"\nSetup failed: {e}")
         return 1
@@ -90,6 +106,35 @@ def run_setup(args: argparse.Namespace) -> int:
         print("\nCancelled - run it again to resume the downloads.")
         return 130
     print("Done. Start the assistant with scripts\\run-tray.bat or try scripts\\run-cli.bat")
+    return 0
+
+
+def run_voice_tools(args: argparse.Namespace) -> int:
+    """--say (make test audio) and --voice-test (WAV harness)."""
+    from pathlib import Path
+
+    from .core.context import bootstrap
+    from .voice.harness import run_wavs, synthesize
+
+    ctx = bootstrap("cli", home=args.home, console_log=args.debug,
+                    console_level="DEBUG" if args.debug else "WARNING", detect_hardware="off")
+    if args.say:
+        if not args.out:
+            print("--say needs --out file.wav")
+            return 2
+        lang = args.lang or ctx.config.data.general.language
+        out = synthesize(ctx, args.say, lang, Path(args.out), args.voice or "F1")
+        print(f"wrote {out}")
+        return 0
+    from .core.assistant import Assistant
+    from .llm.service import LlmService
+    from .tools.runtime import build_tool_system
+
+    tools = build_tool_system(ctx)
+    assistant = Assistant(ctx, tools, LlmService(ctx))
+    run_wavs(ctx, assistant, [Path(p) for p in args.voice_test], realtime=not args.fast,
+             speak_out=Path(args.speak_out) if args.speak_out else None)
+    tools.stop()
     return 0
 
 

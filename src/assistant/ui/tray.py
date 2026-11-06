@@ -46,6 +46,7 @@ class TrayController(QObject):
             ctx.bus.subscribe("llm.state", self._bus_event.emit),
         ]
         self.llm_state = ""
+        self.beep_alarms = True
         self.refresh()
 
     # ------------------------------------------------------------------ menu
@@ -157,7 +158,7 @@ class TrayController(QObject):
             self.notify("Could not open folder", str(e), "warning")
 
     def notify(self, title: str, message: str, level: str = "info") -> None:
-        if level == "alarm":  # timers/reminders: make them noticeable
+        if level == "alarm" and self.beep_alarms:  # timers/reminders: make them noticeable
             from PySide6.QtWidgets import QApplication
 
             QApplication.beep()

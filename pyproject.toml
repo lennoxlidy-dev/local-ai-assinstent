@@ -12,6 +12,12 @@ dependencies = [
     "rapidfuzz>=3.9",          # fuzzy matching (apps, windows, facts)
     "send2trash>=1.8",         # Recycle Bin (never permanent delete)
     "pypdfium2>=4.30",         # fast PDF text extraction
+    # --- voice: CPU only, ONNX Runtime inside sherpa-onnx (no PyTorch) ---
+    "sherpa-onnx>=2.0.1",      # wake word, VAD, speech recognition, speech output, speaker check
+    "sentencepiece>=0.2",      # any wake-word name -> model tokens (no training)
+    "numpy>=2.0",
+    "sounddevice>=0.5",        # microphone + speaker (PortAudio; bundled in the Windows wheel)
+    "soxr>=0.5",               # high-quality resampling
     # --- Windows integration ---
     "pywin32>=308; sys_platform == 'win32'",
     "comtypes>=1.4; sys_platform == 'win32'",

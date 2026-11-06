@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import shlex
 import sys
+import threading
+import time
 from collections import deque
 from collections.abc import Callable
 from typing import Any, TextIO
@@ -24,6 +27,7 @@ from .core.context import AppContext
 from .permissions.gate import ConfirmChoice, ConfirmRequest, Task
 
 Command = Callable[[list[str]], None]
+log = logging.getLogger(__name__)
 
 BANNER = """Assistant {version} - debug CLI ({name})
 Type what you would say. Commands start with ':'  (:help, :quit)."""
@@ -60,6 +64,23 @@ class CliConfirmer:
         return ConfirmChoice.DENY
 
 
+class CliVoiceConfirmer:
+    """While the microphone runs in the CLI: answer permission questions by voice (yes / no)."""
+
+    def __init__(self, cli: DebugCLI, pipeline: Any, fallback: Any):
+        self.cli = cli
+        self.pipeline = pipeline
+        self.fallback = fallback
+
+    def confirm(self, request: ConfirmRequest, cancel: CancelToken) -> ConfirmChoice:
+        if not self.pipeline.can_confirm_by_voice():
+            return self.fallback.confirm(request, cancel)
+        self.cli.print("? Permission needed - say yes or no: " + request.text().replace("\n", "\n  "))
+        choice = self.pipeline.confirm_by_voice(request, threading.Event())
+        self.cli.print(f"  -> {choice or 'no clear answer (denied)'}")
+        return choice or ConfirmChoice.DENY
+
+
 class DebugCLI:
     def __init__(self, ctx: AppContext, *, out: TextIO | None = None,
                  read_line: Callable[[str], str] = input, tools: Any = None):
@@ -74,8 +95,11 @@ class DebugCLI:
         self.raw_args = ""
         ctx.bus.subscribe("ui.notify", lambda e: self.print(
             f"\n[notification] {e.data.get('title', '')}: {e.data.get('message', '')}"))
+        self._voice: Any = None
+        self._voice_unsub: Callable[[], None] | None = None
         self._register_builtin()
         self._register_tools()
+        self._register_voice()
 
     @property
     def assistant(self) -> Any:
@@ -178,6 +202,9 @@ class DebugCLI:
             try:
                 entry[0](args)
             except (ConfigError, KeyError, ValueError) as e:
+                self.print(f"! {e.__class__.__name__}: {e}")
+            except Exception as e:   # e.g. no microphone - report it, keep the CLI running
+                log.exception("command :%s failed", name)
                 self.print(f"! {e.__class__.__name__}: {e}")
             return True
         if self.text_handler is not None:
@@ -391,3 +418,111 @@ class DebugCLI:
                 self.print(f"  now using {svc.spec.title}")
             else:
                 raise ValueError("usage: :llm status|start|stop|models|use <id>")
+
+    # ------------------------------------------------------------------ voice (milestone 4)
+    def _voice_stack(self) -> Any:
+        """Voice models for calibration/enrollment (and :voice on), loaded on first use."""
+        if self._voice is None:
+            from .voice.runtime import build_voice
+
+            self._voice = build_voice(self.ctx, self.assistant)
+        return self._voice
+
+    def _record(self, seconds: float, prompt: str) -> Any:
+        from .voice.calibration import record, speech_level_ok
+
+        self.read_line(f"{prompt}  [Enter, then speak] ")
+        self.print(f"  recording {seconds:.0f} s ...")
+        audio = record(seconds, self.ctx.config.data.voice.input_device)
+        if not speech_level_ok(audio):
+            self.print("  (that was very quiet - is the right microphone selected? :voice devices)")
+        return audio
+
+    def _register_voice(self) -> None:
+        ctx = self.ctx
+        shown = ("voice.", "assistant.reply", "tool.start", "ui.notify")
+
+        def show(e: Any) -> None:
+            if e.topic.startswith(shown) and e.topic not in ("voice.level", "ui.notify"):
+                data = {k: v for k, v in e.data.items() if k not in ("gen",)}
+                self.print(f"  [{time.strftime('%H:%M:%S')}] {e.topic} {json.dumps(data, ensure_ascii=False)[:200]}")
+
+        @self.command("voice", "voice: :voice status|on|off|devices|say <text>")
+        def _voice(args: list[str]) -> None:
+            from .audio.sources import list_devices
+            from .voice.models import VOICE_MODELS, installed, missing
+
+            sub = args[0] if args else "status"
+            v = ctx.config.data.voice
+            if sub == "status":
+                gone = missing(ctx.paths.models_dir)
+                for mid, m in VOICE_MODELS.items():
+                    state = "installed" if installed(mid, ctx.paths.models_dir) else "missing"
+                    self.print(f"  {mid:<8} {m.title:<44} {state}")
+                self.print(f"  wake word: {ctx.config.data.general.assistant_name!r} sensitivity {v.wake_sensitivity}"
+                           f" variants {v.wake_variants}")
+                self.print(f"  mic: {v.input_device or 'Windows default'}   speaker: "
+                           f"{v.output_device or 'Windows default'}")
+                running = self._voice is not None and self._voice.pipeline.running
+                self.print(f"  listening: {'yes' if running else 'no'}" + ("" if not gone else
+                           "   (run setup to download the missing models)"))
+            elif sub == "devices":
+                self.print("  input:  " + ("\n          ".join(list_devices("input")) or "(none)"))
+                self.print("  output: " + ("\n          ".join(list_devices("output")) or "(none)"))
+            elif sub == "on":
+                stack = self._voice_stack()
+                if stack.pipeline.running:
+                    self.print("  already listening")
+                    return
+                stack.pipeline.start()      # raises if the microphone can't be opened
+                self._voice_unsub = ctx.bus.subscribe("*", show)
+                self.tools.gate.confirmer = CliVoiceConfirmer(self, stack.pipeline, CliConfirmer(self))
+                self.print(f"  listening for {ctx.config.data.general.assistant_name!r} - :voice off to stop")
+            elif sub == "off":
+                if self._voice is not None and self._voice.pipeline.running:
+                    self._voice.pipeline.stop()
+                    if self._voice_unsub is not None:
+                        self._voice_unsub()
+                        self._voice_unsub = None
+                    self.tools.gate.confirmer = CliConfirmer(self)
+                self.print("  microphone closed")
+            elif sub == "say" and len(args) > 1:
+                from .core.cancel import CancelToken as Tok
+
+                stack = self._voice_stack()
+                lang = ctx.config.data.general.language
+                stack.speaker.say(" ".join(args[1:]), lang, v.tts_voice_de if lang == "de" else v.tts_voice_en,
+                                  v.tts_speed, Tok())
+                stack.speaker.wait()
+            else:
+                raise ValueError("usage: :voice status|on|off|devices|say <text>")
+
+        @self.command("calibrate", "say the name 3 times to tune the wake word for your voice")
+        def _calibrate(args: list[str]) -> None:
+            from .voice.calibration import calibrate_wake_word
+
+            stack = self._voice_stack()
+            name = ctx.config.data.general.assistant_name
+            clips = [self._record(2.5, f"  {i}/3: say just “{name}”") for i in (1, 2, 3)]
+            res = calibrate_wake_word(ctx, stack.wake, stack.stt, clips)
+            self.print(f"  detected {res.detected}/{res.total} at sensitivity {res.sensitivity}"
+                       f"{'; also listening for ' + ', '.join(res.variants) if res.variants else ''}")
+            if res.heard:
+                self.print(f"  speech recognition heard: {res.heard}")
+            if not res.ok:
+                self.print("  Not reliable yet. Try again a bit louder/clearer, or pick a name with 2-3 syllables.")
+
+        @self.command("enroll", "voice lock: record your voice (:enroll forget removes it)")
+        def _enroll(args: list[str]) -> None:
+            stack = self._voice_stack()
+            if args and args[0] == "forget":
+                stack.voicelock.forget()
+                ctx.config.set("voice.voice_lock", False)
+                self.print("  voiceprint deleted, voice lock off")
+                return
+            prompts = ["the quick brown fox jumps over the lazy dog", "what's the weather like tomorrow",
+                       "open my documents folder and play some music"]
+            clips = [self._record(4, f"  {i}/3: read aloud: “{t}”") for i, t in enumerate(prompts, 1)]
+            stack.voicelock.enroll(clips)
+            ctx.config.set("voice.voice_lock", True)
+            self.print("  enrolled - voice lock is on (:set voice.voice_lock false to turn it off)")

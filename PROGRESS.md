@@ -9,8 +9,8 @@ Living status file. Read this first when continuing in a new session (together w
 | 1 | Skeleton: config in %APPDATA%, logging, tray, autostart, text-mode debug CLI | ✅ done (tested on Linux; Windows test pending by user) |
 | 2 | Tools + permission gate + action log, unit tests with mocked destructive actions | ✅ done (146 tests; Windows backends type-checked, not yet run on Windows) |
 | 3 | LLM server management (llama.cpp), tool-calling agent loop, fast-path intents | ✅ done (tested with real llama.cpp + Qwen3.5/Gemma 4 on CPU; GPU latency pending) |
-| 4 | Voice: mic → wake word → VAD → STT → popup, then TTS; WAV test harness | ⏳ next |
-| 5 | Onboarding wizard + profile/memory | — |
+| 4 | Voice: mic → wake word → VAD → STT → popup, then TTS; WAV test harness | ✅ done (real speech models tested end to end via WAV harness on CPU; mic/popup/hotkeys on Windows pending) |
+| 5 | Onboarding wizard + profile/memory | ⏳ next |
 | 6 | Settings/permissions GUI + history | — |
 | 7 | Performance tuning, game mode, packaging (install.ps1/.bat/.exe), README | — |
 
@@ -19,6 +19,7 @@ Living status file. Read this first when continuing in a new session (together w
 ```
 src/assistant/
   __main__.py          entry point: tray (default) | --cli | --setup [--models ids] | --debug | --smoke-test N | --home DIR
+                       | --say TEXT --out WAV [--lang --voice] | --voice-test WAV... [--speak-out WAV] [--fast]
   cli.py               text-mode debug CLI (":" commands; free text -> the assistant)
   core/
     paths.py           %APPDATA%\Assistant (config, db) + %LOCALAPPDATA%\Assistant (models, bin, logs, cache)
@@ -39,7 +40,10 @@ src/assistant/
     tray.py            tray icon + menu (settings, pause, game mode, start at login, folders, quit)
     icons.py           orb icons drawn at runtime (accent color, paused bars, game-mode badge)
     single_instance.py QLockFile + per-user QLocalServer (2nd launch -> "show" to the 1st)
-    confirm.py         permission questions as an always-on-top dialog (until the popup, M4)
+    confirm.py         permission questions: popup (click or spoken yes/no, first answer wins); dialog fallback
+    popup.py           the popup: PopupModel (QML bridge) + PopupController (events -> orb state, fade, mini chat)
+    qml/Popup.qml      compact card (orb, live transcript, answer, permission question) / mini chat
+    qml/Orb.qml        animated orb: rings with the mic level, spin while thinking, pulse while speaking
   permissions/
     policy.py          capabilities (allow/ask/block), risks, folder rules, permissions.toml
     pathrules.py       Windows path canonicalization (ntpath; junction/8.3/ADS/device-path proof) + rule matching
@@ -69,12 +73,32 @@ src/assistant/
     screen.py          mouse, keyboard, ui_elements, click_element (UIA -> OCR), read_screen, screenshot
     terminal.py        run_command (+read-only classifier), run_as_admin (UAC), winget
     memory.py routines.py   remember/recall/forget; create/run/list/delete routines
+  audio/
+    sources.py         MicSource (sounddevice, 16 kHz or native + soxr), ArraySource (WAV harness), RingBuffer
+    player.py          streaming output (stoppable instantly), NullPlayer for tests
+    earcons.py         wake / end / error / alarm sounds (synthesized, no files)
+  voice/
+    models.py          voice model catalog (URL, size, SHA-256) + install check/download
+    wakeword.py        any-name keyword spotting (BPE tokens at runtime), sensitivity, calibration
+    endpoint.py        Silero VAD endpointing (silence timeout, wait-for-speech, max length)
+    stt.py             Parakeet TDT v3 transcriber (lazy load at wake, idle unload)
+    tts.py             Supertonic 3 speaker: sentence queue, streaming from LLM deltas, idle unload
+    voicelock.py       speaker verification (CAM++ voiceprint, cosine score)
+    pipeline.py        the state machine: wake -> listen -> transcribe -> answer -> speak -> follow-up;
+                       barge-in, cancel, push-to-talk, spoken confirmations, mic reopen
+    yesno.py           spoken yes/no/always/stop (EN+DE), conservative
+    calibration.py     record from the mic; wake-word calibration helper
+    runtime.py         build_voice() from config (+ live config changes); harness.py: --say / --voice-test
   win/
+    hotkeys.py         RegisterHotKey thread: push-to-talk (press/hold), panic
+    dwm.py             popup styling: acrylic blur, rounded clip, WS_EX_NOACTIVATE
+    qos.py             EcoQoS for the always-on audio thread
     backends.py        Windows implementations (pywin32, pyvda, pycaw, uiautomation, WinRT SMTC/OCR, mss,
                        send2trash IFileOperation, Everything SDK, SHGetKnownFolderPath)
     inputs.py          SendInput (fixed-width ctypes structs, unit-tested layout)
     com.py             per-thread COM init; WinRT worker thread (MTA + asyncio)
-tests/                 pytest (~235 tests; test_llm_integration.py runs a real llama-server if available)
+tests/                 pytest (292 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
+                       the real speech models - each skipped when not installed)
 bench/                 llm_bench.py + cases.py: GPU latency + tool-calling accuracy per model
 scripts/               dev-setup.ps1, setup-models.bat, run-tray.bat, run-debug.bat, run-cli.bat
 ```
@@ -194,6 +218,77 @@ Milestone 3 decisions:
   request. The tray's *Game mode* toggle stops the server immediately (VRAM free) and reloads afterwards.
   Vision projector is moved to the CPU automatically when VRAM is tight.
 
+Milestone 4 decisions:
+
+- **One speech runtime: sherpa-onnx 2.0** (ONNX Runtime inside; CPU; no PyTorch) for wake word, VAD, speech
+  recognition, speech output and speaker verification. Windows wheels for Python 3.14 exist. The GPU stays free
+  for the language model and games.
+- **Wake word = any name, no training**: an open-vocabulary keyword spotter (zipformer, GigaSpeech, 3.3M params,
+  ~1.5 % of one core here). The name is turned into model tokens at runtime (umlauts -> ae/oe/ue); the
+  sensitivity slider maps to threshold/boost. **Double-check**: the final transcript must start with the name
+  (fuzzy match >= 85 incl. learned variants), so near-misses ("Travis", a TV) are dropped silently.
+  **Calibration** (`:calibrate` now, onboarding in M5): you say the name 3x; it learns how you say it (e.g.
+  "Javis") and picks the lowest sensitivity that still catches all takes. Limitation: the spotter is
+  English-trained - a German pronunciation of an English name is weaker (a German-accented "Jarvis" was missed
+  0/8 times uncalibrated here; English pronunciation 12/12, and no false triggers on the test speech without the
+  name). Names with 2-3 syllables work best.
+- **Endpointing**: Silero VAD v5, request ends after `voice.silence_timeout_s` (1.0 s) of silence, max 20 s.
+  1.6 s of audio from before the trigger is kept (pre-roll), so the double-check hears the name and nothing
+  you say right after it is lost. "Jarvis ... (pause) ... open notepad" works as a two-step request.
+- **Speech recognition: Parakeet TDT 0.6B v3 (int8)**: EN + DE (25 languages), punctuation and casing, fast on
+  CPU (310 ms for a sentence here). Whisper was the alternative but is much slower on CPU and the GPU is reserved
+  for the LLM. It needs ~870 MB RAM, so it loads when the wake word fires (in parallel with your speech), stays
+  10 min (`voice.stt_keep_loaded_min`) and is then unloaded - idle RAM stays ~200 MB. Live transcript every 0.8 s.
+- **Speech output: Supertonic 3 (int8) instead of Kokoro (EN) + Piper (DE)** - a deliberate deviation from the
+  recommended stack: sherpa-onnx's Windows wheels no longer contain the espeak-ng phonemizer, so Piper refuses
+  to load ("no frontend available") and Kokoro silently drops every word it can't phonemize. Supertonic needs no
+  phonemizer, speaks EN and DE with one 130 MB model, has 10 voices (`voice.tts_voice_en/_de` = F1-F5, M1-M5),
+  was 4-5x faster than Kokoro here (real-time factor ~0.17 vs ~0.8) and had the lowest word error when its
+  output was transcribed back. Answers are spoken sentence by sentence while the LLM is still writing.
+- **Interrupting**: the wake word stays active while it thinks/speaks; saying the name stops the speech at once
+  (barge-in) and starts a new request, so "Jarvis, stop" works mid-sentence. The panic hotkey (Ctrl+Alt+Esc)
+  silences it, cancels the request and releases held keys/mouse buttons. A generation counter guarantees that a
+  cancelled request can't speak or change state later.
+- **Follow-up**: after an answer it listens 5 s (`voice.follow_up_s`) without the name (at least 2 words).
+- **Spoken confirmations**: for a voice request, permission questions appear in the popup (exact command/paths +
+  buttons) *and* are asked aloud ("Delete report.docx? Say yes or no."). A clear yes / ja / okay / go ahead,
+  "always", "for this task", or no / nein / stop answers it; whatever comes first (voice or click) wins; unclear
+  -> asked once more, then only the click remains (90 s -> no). Anything negative or ambiguous is never a yes.
+  The voice lock (if on) also applies to these answers.
+- **Popup**: Qt Quick/QML with the *software* renderer (no GPU use, reliable per-pixel transparency for a window
+  this small). It is created hidden at startup and appears 2-3 ms after the wake-word event. A non-activating
+  tool window (Qt.Tool + WindowDoesNotAcceptFocus + WS_EX_NOACTIVATE): it never takes the focus - until you click
+  it to open the mini chat, which then accepts typing (Esc/✕ closes). Acrylic blur via
+  SetWindowCompositionAttribute (Windows 10 1803+/11, `appearance.popup_blur`) with a rounded clip; theme,
+  accent and `appearance.popup_position` (on the monitor with the mouse) are configurable; it fades
+  `appearance.popup_timeout_s` after the answer (hovering keeps it open). Timers/reminders: popup + alarm sound
+  + the label spoken. The tray's "Type a request…" opens the mini chat.
+- **Voice lock (optional)**: 3D-Speaker CAM++ voiceprint (only a 192-number vector is stored, no audio); cosine
+  score >= `voice.voice_lock_threshold` (0.55). In the tests an enrolled voice scored >0.2 higher than a different
+  voice saying the same sentence. `:enroll` / `:enroll forget` in the CLI (GUI in M5/M6).
+- **Audio**: sounddevice/PortAudio (Windows default device or `voice.input_device` by name); opens at 16 kHz or
+  natively with soxr resampling. Audio stays in RAM (4 s ring buffer + the current request) and is never written
+  to disk. A lost microphone (unplugged headset) is reopened automatically. Output closes the device after 3 s
+  idle. Pause in the tray really closes the microphone.
+- **Hotkeys**: RegisterHotKey (no keyboard hook watching your typing). Push-to-talk Ctrl+Alt+Space (press mode:
+  talk, it ends at the pause or on a second press; `voice.push_to_talk_mode = "hold"`: talks while held);
+  panic Ctrl+Alt+Esc. Without voice models the push-to-talk key opens the chat box.
+- **Efficiency**: the always-on audio thread is an EcoQoS (efficiency) thread on Windows 11; heavy work runs in
+  worker threads; speech recognition and speech output are unloaded after 10 idle minutes.
+
+Voice measurements (this Linux container: 4 vCPU Xeon, CPU only - please re-check on the i9):
+
+| What | Measured | Spec target |
+|------|----------|-------------|
+| Idle CPU, tray app with wake word running | 3.8 % of one core (≈1 % of this 4-core machine as Task Manager counts it) | < 2 % |
+| Idle RAM (RSS) | 205 MB | < 300 MB |
+| Wake-word event -> popup visible | 2-3 ms (window pre-created) | < 300 ms |
+| End of speech -> transcript (after the 1 s silence that marks the end) | 310 ms | < 500 ms |
+| ...first request after speech recognition was unloaded | ~2.6 s (model loads while you speak; ~4.5 s load here) | |
+| Fast-path command -> reply | 2-3 ms | < 1 s |
+| Reply -> first spoken audio | ~550 ms (synthesis of the first sentence) | |
+| RAM while speech models are loaded | ~1.1 GB (back to ~200 MB after 10 idle minutes) | |
+
 ## How to test
 
 ### Automated (any OS)
@@ -285,6 +380,43 @@ Permissions file: `%APPDATA%\Assistant\permissions.toml` (editable; invalid entr
    It prints accuracy, "reply starts" p50/p90 and load time per model and saves the recommendation that
    `llm.profile = "auto"` uses. Please send me the table.
 
+### Milestone 4 on Windows (voice)
+
+1. `powershell -ExecutionPolicy Bypass -File scripts\dev-setup.ps1` (installs the new packages: sherpa-onnx,
+   sounddevice, soxr, numpy, sentencepiece), then `scripts\setup-models.bat` again - it now also downloads the
+   speech models (~0.7 GB; resumable, SHA-256 checked). Then `uv run pytest` - `test_voice_pipeline.py` now runs
+   against the installed models (synthesized speech through the real pipeline, ~1-2 min).
+2. Without a microphone - synthesize test audio and run it through the real pipeline:
+   ```
+   .venv\Scripts\python -m assistant --say "Jarvis, what time is it?" --out t1.wav
+   .venv\Scripts\python -m assistant --say "Jarvis, stell einen Timer auf zwei Minuten." --lang de --voice M2 --out t2.wav
+   .venv\Scripts\python -m assistant --voice-test t1.wav t2.wav --speak-out replies.wav --debug
+   ```
+   It prints every pipeline event with timestamps plus TIMING lines; `replies.wav` holds what it said.
+3. With your microphone in the CLI (`scripts\run-cli.bat`):
+   - `:voice` (models, devices), `:voice devices`, `:set voice.input_device "Headset"` if the default is wrong
+   - `:calibrate` - say the name 3x (tunes the sensitivity, learns your pronunciation)
+   - `:voice on`, then: "Jarvis, what time is it?" / "Jarvis ... (pause) ... open notepad" / right after an answer
+     "and what's the date?" (follow-up, no name) / "Jarvis, delete test.txt on my desktop" (asks aloud - answer
+     "yes" or "no") / `:voice off`
+   - `:voice say Hallo, ich bin Jarvis.` (`:set voice.tts_voice_de M3` to try other voices)
+   - `:enroll` (read 3 sentences) -> voice lock on; let a video say "Jarvis, ..." -> rejected. `:enroll forget`.
+4. Tray app (`scripts\run-debug.bat` shows the log):
+   - tooltip "listening for “Jarvis”". "Jarvis, set a timer for one minute" -> popup at the top center: the orb
+     reacts to your voice, live transcript, then answer + speech. Keep typing in another window meanwhile - the
+     popup must never take the focus. After 1 min: alarm sound + popup + spoken label.
+   - Ctrl+Alt+Space = push-to-talk (no name needed); Ctrl+Alt+Esc while it talks = silence + cancel;
+     "Jarvis, stop" while it answers.
+   - Click the popup -> mini chat (type "open notepad"; Esc closes). Tray -> "Type a request…" opens it too.
+   - A risky request: the popup shows the exact path/command with buttons and it asks aloud - click or say yes/no.
+   - Tray -> Pause listening: the Windows microphone indicator disappears; resume brings it back.
+   - `config.toml`: `appearance.popup_position = "bottom-right"`, `theme = "light"`, `accent = "#22C55E"`,
+     `popup_blur = false` (if the blur looks wrong), `voice.push_to_talk_mode = "hold"`.
+   - Task Manager: idle ~0 % CPU and ~200 MB; ~1.1 GB right after a voice request, back down after 10 minutes.
+5. Please report: wake-word hit rate with your pronunciation (before/after `:calibrate`), false triggers while a
+   video/podcast plays, how the popup looks (blur, corners, position), whether focus was ever stolen, and the
+   TIMING lines from `%LOCALAPPDATA%\Assistant\logs\assistant-debug.log`.
+
 ## Benchmark results (tool-calling accuracy, measured here on CPU - latency must be re-measured on the GPU)
 
 24 realistic EN/DE cases on a simulated PC (real agent loop, tool registry and permission gate; fake OS
@@ -318,7 +450,14 @@ action that no tool performed) and a fast-path "remember/merk dir" intent. Laten
   unit-tested, but **first real-Windows run is pending** - expect a round of fixes, especially for
   Spotify UI automation, focus stealing rules, pyvda on your exact build, and WMI brightness.
 - TODO later: Spotify Web API (optional own credentials), Windows Search as a middle search tier,
-  vision-based clicking (M3), panic hotkey wiring (M4), timers/notifications in the tray app (M3/M4).
+  vision-based clicking (M3).
 - M3 open points: GPU latency targets (reply starts < 2 s, fast path < 1 s) must be measured on your laptop with
-  the benchmark; Spotify Web API still TODO; the popup with streaming text arrives in M4.
-- Next: M4 - voice pipeline (mic -> wake word -> VAD -> STT -> popup, TTS) with a WAV test harness.
+  the benchmark.
+- M4 open points: microphone/speaker (WASAPI), hotkeys, the acrylic/rounded non-activating popup and EcoQoS are
+  written against the Windows APIs and type-checked but have not run on Windows yet. The wake word is weaker for
+  German pronunciations of English names (calibration helps; there is no German keyword-spotting model in
+  sherpa-onnx). Tool summaries in permission questions are English even with a German UI. No acoustic echo
+  cancellation: with loud speakers its own voice can reach the mic (mitigated: barge-in needs the name, and the
+  name inside its own speech is ignored) - headphones avoid it. Calibration/enrollment are CLI commands until the
+  onboarding wizard (M5) and settings window (M6).
+- Next: M5 - onboarding wizard (>= 15 questions, say the name 3x to calibrate) + profile/memory.

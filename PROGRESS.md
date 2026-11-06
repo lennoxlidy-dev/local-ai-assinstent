@@ -7,8 +7,8 @@ Living status file. Read this first when continuing in a new session (together w
 | # | Milestone | Status |
 |---|-----------|--------|
 | 1 | Skeleton: config in %APPDATA%, logging, tray, autostart, text-mode debug CLI | ✅ done (tested on Linux; Windows test pending by user) |
-| 2 | Tools + permission gate + action log, unit tests with mocked destructive actions | ⏳ next |
-| 3 | LLM server management (llama.cpp), tool-calling agent loop, fast-path intents | — |
+| 2 | Tools + permission gate + action log, unit tests with mocked destructive actions | ✅ done (146 tests; Windows backends type-checked, not yet run on Windows) |
+| 3 | LLM server management (llama.cpp), tool-calling agent loop, fast-path intents | ⏳ next |
 | 4 | Voice: mic → wake word → VAD → STT → popup, then TTS; WAV test harness | — |
 | 5 | Onboarding wizard + profile/memory | — |
 | 6 | Settings/permissions GUI + history | — |
@@ -38,7 +38,29 @@ src/assistant/
     tray.py            tray icon + menu (settings, pause, game mode, start at login, folders, quit)
     icons.py           orb icons drawn at runtime (accent color, paused bars, game-mode badge)
     single_instance.py QLockFile + per-user QLocalServer (2nd launch -> "show" to the 1st)
-tests/                 pytest (27 tests in M1)
+  permissions/
+    policy.py          capabilities (allow/ask/block), risks, folder rules, permissions.toml
+    pathrules.py       Windows path canonicalization (ntpath; junction/8.3/ADS/device-path proof) + rule matching
+    gate.py            PermissionGate.evaluate/authorize, Confirmer protocol, Task (cancel token + grants)
+  storage/             SQLite (WAL): action_log, facts, routines, timers (+ conversations in M3)
+  tools/
+    base.py            Tool/Plan/ToolResult, ToolRegistry.invoke = validate -> plan -> gate -> log -> run -> log
+    schema.py          tiny JSON-schema DSL (strict schema for the LLM, validation before every call)
+    platform.py        backend interfaces + Unsupported fallback; create_platform()
+    runtime.py         build_tool_system(): wires platform, gate, log, services, registry
+    files.py extract.py file_index.py   find/list/read/create/copy/move/rename/delete(Recycle Bin)/open
+    apps.py            app index matching, open_app (+desktop rules, DesktopGuard), window, desktop, open_url
+    media.py           media (SMTC), play_music (Spotify search URI + UI Automation "play" button)
+    system.py timers.py   volume, brightness, clipboard, power, timers/reminders
+    screen.py          mouse, keyboard, ui_elements, click_element (UIA -> OCR), read_screen, screenshot
+    terminal.py        run_command (+read-only classifier), run_as_admin (UAC), winget
+    memory.py routines.py   remember/recall/forget; create/run/list/delete routines
+  win/
+    backends.py        Windows implementations (pywin32, pyvda, pycaw, uiautomation, WinRT SMTC/OCR, mss,
+                       send2trash IFileOperation, Everything SDK, SHGetKnownFolderPath)
+    inputs.py          SendInput (fixed-width ctypes structs, unit-tested layout)
+    com.py             per-thread COM init; WinRT worker thread (MTA + asyncio)
+tests/                 pytest (146 tests) + fakes.py (fake OS backends)
 scripts/               dev-setup.ps1, run-tray.bat, run-debug.bat, run-cli.bat
 ```
 
@@ -82,6 +104,43 @@ Design decisions:
 - "Settings…" opens `config.toml` in your editor until the real settings window (M6); edits are
   picked up live (file watcher).
 
+Milestone 2 decisions:
+
+- **One code path for every tool call** (`ToolRegistry.invoke`): validate args -> plan (exact paths,
+  command, risks) -> permission gate -> action-log row -> run -> outcome. Blocked/denied/invalid calls are
+  logged too. Routines are just sequences of normal tool calls, so every step is checked.
+- **Permission model**: capability level (allow/ask/block) x folder rule (full/read/ask/none, most
+  specific wins) x risk tags. Risky actions (delete, move, overwrite, terminal changes, installs, closing
+  apps with unsaved work, force-close, admin, power) ask *even if the capability is "allow"* unless you
+  remove that risk from `always_confirm` (admin can never be removed). Answers: once / for this task
+  (never offered for risky actions) / always (persists "allow"; only for non-risky asks).
+- **Defaults**: reads allowed everywhere; Windows, Program Files, ProgramData read-only; SSH/GPG keys,
+  Windows credential stores and browser profiles (passwords/cookies) **blocked** even for reading
+  (and hidden from search results); the assistant's own config/data folders can never be written by a
+  tool (so a prompt-injected instruction can't grant itself permissions). Mouse/keyboard = ask (grant per task).
+- **Hard refusals no setting overrides**: deleting/moving a drive root, your profile folder or a main
+  folder (Desktop/Documents/Downloads...); killing Windows system processes; non-http URLs in open_url.
+- **Delete = Recycle Bin only**: send2trash's IFileOperation path with a progress sink that aborts any
+  non-recyclable delete; the legacy SHFileOperation fallback (which can delete permanently) is refused.
+  Overwrites move the old file to the Recycle Bin first.
+- **Terminal classifier is an allowlist**: only known information commands (Get-ChildItem, ipconfig /all,
+  systeminfo, ...) with no redirection/sub-expressions/script blocks/.NET calls/escapes/variables run
+  without asking; paths they mention are checked against folder rules; network commands always ask.
+  PowerShell runs via `-EncodedCommand` (no quoting bugs), output is untrusted data.
+- **Untrusted data**: tool results from files, clipboard, screen/OCR, UI element names and command output
+  are flagged `untrusted`; the agent (M3) wraps them as data, never instructions.
+- **Apps**: index from `Get-StartApps` (Start Menu + Store apps, cached 24 h) with Start Menu .lnk fallback;
+  launch via `shell:AppsFolder\<AppID>`; fuzzy matching (rapidfuzz) + aliases (`music` -> your music app).
+- **Virtual desktops**: pyvda 0.6 (supports up to Win11 24H2/25H2 builds); "Assistant" desktop is created
+  and named on first use; default rule `spotify = "assistant"`. `DesktopGuard` restores your desktop and
+  focus after apps that yank you to their desktop. If pyvda fails, apps open on the current desktop.
+- **Spotify "play X"**: `spotify:search:X` + UI Automation finds the top result's "Play …" button
+  (EN/DE names) and invokes it without moving the mouse. Spotify Web API (optional credentials) is still TODO.
+- **File search**: Everything SDK DLL if present (`%LOCALAPPDATA%\Assistant\bin\Everything64.dll`;
+  the M7 installer will fetch it), else our own trigram-FTS5 filename index built by a
+  background-priority thread (low CPU *and* I/O priority), else a bounded folder scan.
+- **COM/WinRT threading**: classic COM per thread (STA); WinRT (SMTC, OCR) on one MTA worker thread.
+
 ## How to test
 
 ### Automated (any OS)
@@ -114,8 +173,48 @@ uv run pytest
 5. `scripts\run-debug.bat` → same app with live log in the console (Ctrl+C quits).
 6. Logs: `%LOCALAPPDATA%\Assistant\logs\` (`crash.log` should be empty).
 
+### Milestone 2 on Windows (debug CLI)
+
+`scripts\run-cli.bat`, then try (each answer prompt: y = once, t = for this task, a = always, n = no):
+
+```
+:tools                                              list all tools  (:tools open_app shows one schema)
+:tool open_app {"name": "notepad"}                  opens Notepad (no question: apps.open = allow)
+:tool keyboard {"action": "type", "text": "Hallo Welt", "window": "notepad"}   asks (input), then types
+:tool window {"action": "close", "target": "notepad"}   Notepad asks to save (WM_CLOSE, nothing forced)
+:tool open_app {"name": "spotify"}                  Spotify opens on a new "Assistant" desktop; you stay put
+:tool play_music {"query": "Bohemian Rhapsody"}     should start the top result (report what happens!)
+:tool media {"action": "status"}                    / pause / next
+:tool volume {"level": 30}                          :tool brightness {"level": 60}
+:tool desktop {"action": "list"}                    / {"action": "switch", "target": "assistant"} / "1"
+:tool find_files {"query": "invoice"}               (uses the fallback index/folder scan unless Everything SDK is present)
+:tool read_file {"path": "Documents\\some.pdf"}
+:tool create_file {"path": "Desktop\\test.txt", "content": "hello"}      asks
+:tool rename_path {"path": "Desktop\\test.txt", "new_name": "test2.txt"}  asks (move risk)
+:tool delete_path {"path": "Desktop\\test2.txt"}  asks; then check the Recycle Bin
+:tool read_file {"path": "~\\.ssh\\id_rsa"}        Blocked (credential folder)
+:tool create_file {"path": "C:\\Windows\\x.txt", "content": "x"}   Blocked (protected folder)
+:tool run_command {"command": "Get-Date"}           runs directly (read-only)
+:tool run_command {"command": "New-Item $env:TEMP\\x.txt"}   asks, shows the exact command
+:tool run_as_admin {"command": "whoami /groups"}    asks, then the UAC prompt
+:tool timer {"action": "set_timer", "seconds": 10, "label": "tea"}   prints a notification after 10 s
+:tool ui_elements {"window": "notepad"}             buttons/menus with coordinates
+:tool read_screen {}                                OCR of the whole screen
+:tool remember {"fact": "My sister's birthday is May 3rd"}    then :facts
+:tool create_routine {"name": "test", "steps": [{"tool": "volume", "args": {"level": 25}}, {"tool": "open_app", "args": {"name": "calculator"}}]}
+:tool run_routine {"name": "test"}
+:log 20                                             the action log (incl. denied/blocked)
+:perm                                               permission table; :perm input allow   to change
+```
+
+Permissions file: `%APPDATA%\Assistant\permissions.toml` (editable; invalid entries fall back to safe defaults).
+
 ## Known gaps / next steps
 
-- Nothing has run on real Windows yet (this was built in a Linux container): first Windows test of
-  M1 pending. Windows-only code paths in M1: winreg autostart, AUMID, DPI awareness, os.startfile.
-- Next: M2 tools + permission gate + action log.
+- Nothing has run on real Windows yet (built in a Linux container). M1/M2 Windows code is type-checked
+  against the real Windows wheels (pyright, platform=Windows: 0 errors) and the SendInput struct layout is
+  unit-tested, but **first real-Windows run is pending** - expect a round of fixes, especially for
+  Spotify UI automation, focus stealing rules, pyvda on your exact build, and WMI brightness.
+- TODO later: Spotify Web API (optional own credentials), Windows Search as a middle search tier,
+  vision-based clicking (M3), panic hotkey wiring (M4), timers/notifications in the tray app (M3/M4).
+- Next: M3 - llama.cpp server management, agent loop with tool calling, fast-path intents.

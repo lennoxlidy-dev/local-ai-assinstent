@@ -53,7 +53,10 @@ def bootstrap(mode: str, *, home: str | None = None, console_log: bool = False,
                   console=console_log, console_level=console_level)
 
     bus = EventBus()
-    store.on_change(lambda keys: bus.publish(Topic.CONFIG_CHANGED, keys=keys))
+    def config_changed(keys: list[str]) -> None:
+        bus.publish(Topic.CONFIG_CHANGED, keys=keys)
+
+    store.on_change(config_changed)
     ctx = AppContext(mode=mode, paths=paths, config=store, bus=bus, state=AppState(bus),
                      autostart=Autostart())
 

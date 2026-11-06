@@ -76,7 +76,7 @@ class SingleInstance(QObject):
             buf = bytearray()
 
             def on_ready(sock: QLocalSocket = sock, buf: bytearray = buf) -> None:
-                buf.extend(bytes(sock.readAll()))
+                buf.extend(sock.readAll().data())
                 while b"\n" in buf:
                     line, _, rest = bytes(buf).partition(b"\n")
                     buf[:] = rest

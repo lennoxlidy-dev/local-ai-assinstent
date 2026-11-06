@@ -29,7 +29,7 @@ import time
 import tomllib
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import Any, get_args, get_origin, get_type_hints
+from typing import Any, cast, get_args, get_origin, get_type_hints
 from collections.abc import Callable
 
 import tomli_w
@@ -40,9 +40,12 @@ CONFIG_VERSION = 1
 
 
 def opt(default: Any, *, doc: str = "", choices: tuple | None = None,
-        min: float | None = None, max: float | None = None, pattern: str | None = None) -> Any:
+        min: float | None = None, max: float | None = None, pattern: str | None = None,
+        value_choices: tuple | None = None) -> Any:
     """Declare a config field with validation metadata."""
     meta: dict[str, Any] = {"doc": doc}
+    if value_choices is not None:
+        meta["value_choices"] = tuple(value_choices)
     if choices is not None:
         meta["choices"] = tuple(choices)
     if min is not None:
@@ -114,6 +117,29 @@ class LLMConfig:
 
 
 @dataclass
+class AppsConfig:
+    music_app: str = opt("Spotify", doc="Used for 'play ...' and 'music'.")
+    browser: str = opt("", doc="Empty = Windows default browser.")
+    aliases: dict[str, str] = opt({}, doc='Extra names for apps, e.g. {"mail" = "Outlook"}.')
+
+
+@dataclass
+class DesktopsConfig:
+    enabled: bool = opt(True, doc="Use a dedicated virtual desktop for background apps.")
+    name: str = opt("Assistant", doc="Name of the dedicated virtual desktop.")
+    default_rule: str = opt("current", choices=("current", "assistant"),
+                            doc="Where apps open unless a rule says otherwise.")
+    rules: dict[str, str] = opt({"spotify": "assistant"}, value_choices=("current", "assistant"),
+                                doc='Per app: "assistant" (dedicated desktop) or "current".')
+
+
+@dataclass
+class FilesConfig:
+    use_everything: bool = opt(True, doc="Use Everything (voidtools) for search when it is installed.")
+    index_roots: list[str] = opt([], doc="Extra folders for the fallback index (home folders are always included).")
+
+
+@dataclass
 class PrivacyConfig:
     save_conversations: bool = opt(True)
     retention_days: int = opt(90, min=0, max=3650, doc="Delete conversations older than this; 0 = keep forever.")
@@ -149,6 +175,9 @@ class Config:
     voice: VoiceConfig = field(default_factory=VoiceConfig)
     hotkeys: HotkeyConfig = field(default_factory=HotkeyConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    apps: AppsConfig = field(default_factory=AppsConfig)
+    desktops: DesktopsConfig = field(default_factory=DesktopsConfig)
+    files: FilesConfig = field(default_factory=FilesConfig)
     privacy: PrivacyConfig = field(default_factory=PrivacyConfig)
     appearance: AppearanceConfig = field(default_factory=AppearanceConfig)
     performance: PerformanceConfig = field(default_factory=PerformanceConfig)
@@ -204,6 +233,10 @@ def validate_value(value: Any, tp: Any, meta: dict[str, Any] | None = None) -> A
     else:  # pragma: no cover - programming error
         raise ConfigError(f"unsupported config type {_describe(tp)}")
 
+    if "value_choices" in meta and isinstance(value, dict):
+        bad = [f"{k}={v}" for k, v in value.items() if v not in meta["value_choices"]]
+        if bad:
+            raise ConfigError(f"values must be one of {', '.join(meta['value_choices'])}; got {', '.join(bad)}")
     if "choices" in meta and value not in meta["choices"]:
         raise ConfigError(f"must be one of {', '.join(map(str, meta['choices']))}; got {value!r}")
     if "min" in meta and value < meta["min"]:
@@ -262,7 +295,7 @@ def _section_from_dict(cls: type, data: dict[str, Any], prefix: str,
             if not isinstance(raw, dict):
                 warnings.append(f"'{dotted}' must be a section; using defaults")
                 continue
-            setattr(obj, key, _section_from_dict(tp, raw, dotted + ".", warnings, unknown))
+            setattr(obj, key, _section_from_dict(cast(type, tp), raw, dotted + ".", warnings, unknown))
             continue
         try:
             setattr(obj, key, validate_value(raw, tp, dict(f.metadata)))

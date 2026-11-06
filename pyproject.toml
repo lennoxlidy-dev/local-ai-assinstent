@@ -9,6 +9,24 @@ dependencies = [
     "PySide6-Essentials>=6.10",
     "tomli-w>=1.0",
     "psutil>=6.0",
+    "rapidfuzz>=3.9",          # fuzzy matching (apps, windows, facts)
+    "send2trash>=1.8",         # Recycle Bin (never permanent delete)
+    "pypdfium2>=4.30",         # fast PDF text extraction
+    # --- Windows integration ---
+    "pywin32>=308; sys_platform == 'win32'",
+    "comtypes>=1.4; sys_platform == 'win32'",
+    "pyvda>=0.6; sys_platform == 'win32'",            # virtual desktops (undocumented APIs)
+    "pycaw>=20240316; sys_platform == 'win32'",       # volume (Core Audio)
+    "uiautomation>=2.0.20; sys_platform == 'win32'",  # UI Automation
+    "mss>=9.0; sys_platform == 'win32'",              # screenshots
+    "winrt-runtime>=3.0; sys_platform == 'win32'",
+    "winrt-Windows.Foundation>=3.0; sys_platform == 'win32'",
+    "winrt-Windows.Foundation.Collections>=3.0; sys_platform == 'win32'",
+    "winrt-Windows.Globalization>=3.0; sys_platform == 'win32'",
+    "winrt-Windows.Graphics.Imaging>=3.0; sys_platform == 'win32'",
+    "winrt-Windows.Storage.Streams>=3.0; sys_platform == 'win32'",
+    "winrt-Windows.Media.Control>=3.0; sys_platform == 'win32'",   # media sessions (SMTC)
+    "winrt-Windows.Media.Ocr>=3.0; sys_platform == 'win32'",       # OCR
 ]
 
 [project.scripts]

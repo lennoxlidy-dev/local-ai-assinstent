@@ -123,6 +123,8 @@ class VoicePipeline:
         self._last_partial = 0.0
         self._last_level = 0.0
         self._housekeeping = time.monotonic()
+        self._silent_s = 0.0          # how long the microphone has delivered nothing but exact zeros
+        self._heard_sound = False
         self.current_cancel: CancelToken | None = None
         self._answering: int | None = None    # generation of the voice request being answered
         self.requests: queue.Queue[tuple[str, str]] = queue.Queue()   # (kind, text) - for the harness/tests
@@ -160,6 +162,7 @@ class VoicePipeline:
         src = self.source_factory()
         src.start()
         self._source = src
+        self._silent_s, self._heard_sound = 0.0, False
         self._running = True
         self._set(VState.IDLE)
         self.ctx.state.update(voice_ready=True)
@@ -253,6 +256,8 @@ class VoicePipeline:
                 continue
             if frame is None:
                 break
+            if not self._heard_sound:
+                self._check_silence(frame)
             self.ring.write(frame)
             self._publish_level(src)
             with self._lock:
@@ -266,6 +271,25 @@ class VoicePipeline:
         log.debug("voice audio loop ended")
         if self._running:   # source ended (WAV harness)
             self._running = False
+
+    SILENT_MIC_S = 6.0
+
+    def _check_silence(self, frame: np.ndarray) -> None:
+        """A real microphone always has a little noise. Exact zeros mean Windows blocks it (privacy setting) or a
+        muted/virtual device: say how to fix it, once. Costs nothing once any sound was heard."""
+        if frame.size and float(np.max(np.abs(frame))) > 1e-6:
+            self._heard_sound = True
+            return
+        self._silent_s += frame.size / RATE
+        if self.SILENT_MIC_S <= self._silent_s < self.SILENT_MIC_S + frame.size / RATE:
+            log.warning("the microphone delivers only silence")
+            de = self.ctx.config.data.general.language == "de"
+            self.ctx.bus.publish("ui.notify", title="Mikrofon" if de else "Microphone", level="warning", message=(
+                "Das Mikrofon liefert nur Stille. Windows-Einstellungen → Datenschutz und Sicherheit → Mikrofon: "
+                "„Desktop-Apps Zugriff auf das Mikrofon gewähren“ einschalten - oder unter Einstellungen → Stimme "
+                "ein anderes Mikrofon wählen." if de else
+                "The microphone only delivers silence. In Windows Settings → Privacy & security → Microphone, turn on "
+                "“Let desktop apps access your microphone” - or choose another microphone in Settings → Voice."))
 
     def _reopen(self, old: AudioSource) -> AudioSource | None:
         """The microphone died (unplugged, driver reset): keep trying to open it again."""
@@ -284,6 +308,7 @@ class VoicePipeline:
                     new.stop()
                     return None
                 self._source = new
+                self._silent_s, self._heard_sound = 0.0, False
                 log.info("microphone reopened")
                 self.ctx.bus.publish("voice.mic_back")
                 return new

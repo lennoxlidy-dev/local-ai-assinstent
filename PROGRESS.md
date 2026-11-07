@@ -119,7 +119,7 @@ src/assistant/
                        send2trash IFileOperation, Everything SDK, SHGetKnownFolderPath)
     inputs.py          SendInput (fixed-width ctypes structs, unit-tested layout)
     com.py             per-thread COM init; WinRT worker thread (MTA + asyncio)
-tests/                 pytest (379 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
+tests/                 pytest (381 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
                        the real speech models - each skipped when not installed)
 bench/                 llm_bench.py + cases.py: GPU latency + tool-calling accuracy per model;
                        perf_bench.py: every performance target of the spec (idle, wake, STT, TTS, fast path, LLM)
@@ -493,6 +493,24 @@ Fixes in version 0.1.2 (from the first real Windows run):
   `settings.call("windowClosed")`. The tests and `--self-test` close it the way the X button does (they called the
   Python close before, which is why this wasn't caught).
 - `--setup` also writes failed downloads to `cli.log` (they were only printed).
+
+Version 0.1.3 (feedback: "make it work without push-to-talk", "it shouldn't look like this" - the taskbar showed
+Windows' blank program icon):
+
+- **App icon everywhere**: the app never set a window icon, so title bars, dialogs and the taskbar button showed
+  Windows' blank program icon. New design (icons.py): a two-tone glowing orb (accent → analogous hue, violet → cyan by
+  default) with a white voice waveform (3 bars below 24 px, 5 above); the same drawing is the tray icon (grey with pause
+  bars when paused, ring while listening, game-mode badge), the window icon (`QApplication.setWindowIcon`, follows the
+  accent colour) and `packaging/assistant.ico` (Start menu, Installed apps, .exe).
+- **Hands-free from the start**: voice used to start only at launch or after *all* downloads (incl. the 6 GB language
+  model), and the earlier download failures kept the speech models from installing, so only push-to-talk (= the typing
+  box without voice) worked. Now listening starts as soon as the speech models are installed, a notification says
+  "Ready - just say “<name>” …" once the microphone is really open (not at login), and the post-wizard "Ready" message
+  is no longer shown when voice couldn't start.
+- **Silent microphone warning**: Windows' privacy switch ("Let desktop apps access your microphone") makes the device
+  deliver exact zeros - the wake word then never fires and nothing says why. After 6 s of digital silence a
+  notification explains the setting (checked only until the first sound, so no idle cost).
+- `--self-test` also checks that the app icon is set.
 
 ## How to test
 

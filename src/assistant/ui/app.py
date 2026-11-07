@@ -48,6 +48,7 @@ class TrayApp(QObject):
     _hotkeys_changed = Signal()
     _setup_event = Signal(object)
     _game_unload = Signal(bool)
+    _icon_changed = Signal()
 
     def __init__(self, ctx: AppContext, app: QApplication, *, autostarted: bool = False, open_setup: bool = False):
         super().__init__()
@@ -82,6 +83,8 @@ class TrayApp(QObject):
         self._hotkeys_changed.connect(self._register_hotkeys)
         self._setup_event.connect(self._on_setup_event)
         self.game_watcher: Any = None
+        self._voice_starting = False
+        self._icon_changed.connect(self._apply_window_icon)
         self._unload_timer = QTimer(self, singleShot=True, interval=120_000)
         self._unload_timer.timeout.connect(self._unload_after_game_request)
         self._game_unload.connect(self._game_unload_timer)
@@ -132,13 +135,22 @@ class TrayApp(QObject):
         keys = event.data.get("keys", [])
         if any(k.startswith("hotkeys.") or k == "voice.push_to_talk_mode" for k in keys):
             self._hotkeys_changed.emit()
+        if "appearance.accent" in keys:
+            self._icon_changed.emit()
         if "performance.game_mode_auto" in keys and self.game_watcher is not None:
             if self.ctx.config.data.performance.game_mode_auto:
                 self.game_watcher.start()
             else:
                 self.game_watcher.stop()
 
+    def _apply_window_icon(self) -> None:
+        """Title bars, taskbar buttons and dialogs show the orb (else Windows shows a blank program icon)."""
+        from .icons import app_icon
+
+        self.app.setWindowIcon(app_icon(self.ctx.config.data.appearance.accent))
+
     def start(self) -> None:
+        self._apply_window_icon()
         self.tray.show()
         self.popup.create()
         self._register_hotkeys()
@@ -169,7 +181,7 @@ class TrayApp(QObject):
             return
         self.llm.start_background()
         log.info("assistant ready (LLM loading in the background)")
-        threading.Thread(target=self._init_voice, name="voice-init", daemon=True).start()
+        self._start_voice(announce=not self.autostarted)
         self._resume_downloads()
 
     def _start_game_watcher(self) -> None:
@@ -227,16 +239,15 @@ class TrayApp(QObject):
         self.setup_window = None
         QTimer.singleShot(500, trim_memory)
         self.force_setup = False
-        name = self.ctx.config.data.general.assistant_name
         if self.voice is None:
-            threading.Thread(target=self._init_voice, name="voice-init", daemon=True).start()
-        elif not self.ctx.state.paused:
-            threading.Thread(target=self._set_voice_paused, args=(False,), name="voice-resume", daemon=True).start()
+            self._start_voice(announce=True)      # says "Ready - just say …" once it really listens
+        else:
+            if not self.ctx.state.paused:
+                threading.Thread(target=self._set_voice_paused, args=(False,), name="voice-resume",
+                                 daemon=True).start()
+            self._announce_listening()
         self._maybe_start_llm()
         self.tray.refresh()
-        self.ctx.bus.publish(Topic.NOTIFY, title=name, message=(
-            f"Bereit - sag „{name}“, wenn du etwas brauchst." if self.ctx.config.data.general.language == "de"
-            else f"Ready - just say “{name}” when you need me."))
 
     def _suspend_hotkeys(self, on: bool) -> None:
         """The wizard's hotkey page needs the keys itself while you press the new combination."""
@@ -275,11 +286,12 @@ class TrayApp(QObject):
     def _on_setup_event(self, event: Event) -> None:
         if event.topic == "setup.job_done" and event.data.get("kind") in ("llm", "llama"):
             self._maybe_start_llm()
+        elif event.topic == "setup.job_done" and event.data.get("kind") == "voice":
+            self._maybe_start_voice()             # don't wait for the (big) language model download
         elif event.topic == "setup.finished":
             if self.setup_window is None:
                 self._maybe_start_llm()
-                if self.voice is None and self.ctx.config.data.general.onboarding_done:
-                    threading.Thread(target=self._init_voice, name="voice-init", daemon=True).start()
+                self._maybe_start_voice()
             if event.data.get("failed") or event.data.get("error"):
                 from ..onboarding.downloads import describe
 
@@ -291,40 +303,66 @@ class TrayApp(QObject):
                     "tray menu)."))
 
     # ------------------------------------------------------------------ voice
-    def _init_voice(self) -> None:
+    def _maybe_start_voice(self) -> None:
+        from ..voice.models import missing
+
+        if (self.voice is None and self.setup_window is None and self.ctx.config.data.general.onboarding_done
+                and not missing(self.ctx.paths.models_dir)):
+            self._start_voice(announce=True)
+
+    def _start_voice(self, announce: bool = False) -> None:
+        """Load the speech models and open the microphone in the background (once)."""
+        if self.voice is not None or self._voice_starting or self.assistant is None:
+            return
+        self._voice_starting = True
+        threading.Thread(target=self._init_voice, args=(announce,), name="voice-init", daemon=True).start()
+
+    def _announce_listening(self) -> None:
+        name = self.ctx.config.data.general.assistant_name
+        de = self.ctx.config.data.general.language == "de"
+        self.ctx.bus.publish(Topic.NOTIFY, title=name, message=(
+            f"Bereit - sag „{name}“ und dann, was du brauchst." if de else
+            f"Ready - just say “{name}” and then what you need."))
+
+    def _init_voice(self, announce: bool = False) -> None:
         """Load the wake word / VAD models (worker thread, ~0.5 s) and open the microphone."""
         from ..voice.runtime import VoiceUnavailable, build_voice
 
-        if self.assistant is None:
-            return
-        t0 = time.perf_counter()
         try:
-            stack = build_voice(self.ctx, self.assistant)
-        except VoiceUnavailable as e:
-            log.warning("voice off: %s", e)
-            self.ctx.bus.publish(Topic.NOTIFY, title="Voice is not set up yet", level="warning",
-                                 message="The speech models are missing - run scripts\\setup-models.bat. "
-                                         "Until then you can type: tray icon → Type a request.")
-            return
-        except Exception as e:
-            log.exception("voice could not be started")
-            self.ctx.bus.publish(Topic.NOTIFY, title="Voice problem", message=str(e)[:240], level="warning")
-            return
-        self.voice = stack
-        self.tray.beep_alarms = False       # the voice stack plays a proper alarm sound
-        if self.confirmer is not None:
-            self.confirmer.voice = stack.pipeline
-        log.debug("TIMING stage=voice_init ms=%.1f", (time.perf_counter() - t0) * 1000)
-        if not self.ctx.state.paused:
-            self._set_voice_paused(False, retries=3)
+            if self.assistant is None:
+                return
+            t0 = time.perf_counter()
+            try:
+                stack = build_voice(self.ctx, self.assistant)
+            except VoiceUnavailable as e:
+                log.warning("voice off: %s", e)
+                downloading = self.downloads is not None and self.downloads.running
+                self.ctx.bus.publish(Topic.NOTIFY, title="Voice", level="info" if downloading else "warning", message=(
+                    "Listening starts as soon as the speech models are downloaded (see Settings → Voice)."
+                    if downloading else "The speech models are missing: Settings → Voice → Download missing "
+                    "models. Until then you can type: click the tray icon → Type a request."))
+                return
+            except Exception as e:
+                log.exception("voice could not be started")
+                self.ctx.bus.publish(Topic.NOTIFY, title="Voice problem", message=str(e)[:240], level="warning")
+                return
+            self.voice = stack
+            self.tray.beep_alarms = False       # the voice stack plays a proper alarm sound
+            if self.confirmer is not None:
+                self.confirmer.voice = stack.pipeline
+            log.debug("TIMING stage=voice_init ms=%.1f", (time.perf_counter() - t0) * 1000)
+            if not self.ctx.state.paused and self._set_voice_paused(False, retries=3) and announce:
+                self._announce_listening()
+        finally:
+            self._voice_starting = False
 
-    def _set_voice_paused(self, paused: bool, retries: int = 1) -> None:
+    def _set_voice_paused(self, paused: bool, retries: int = 1) -> bool:
         if self.voice is None:
-            return
+            return False
         for attempt in range(retries):
             try:
                 self.voice.pipeline.set_paused(paused)
-                return
+                return True
             except Exception as e:   # no microphone, device busy, audio service not up yet (login)
                 log.warning("microphone could not be opened: %s", e)
                 if attempt + 1 < retries:
@@ -333,6 +371,7 @@ class TrayApp(QObject):
                 self.ctx.bus.publish(Topic.NOTIFY, title="Microphone", level="warning",
                                      message=f"Could not open the microphone ({e}). Check Windows sound settings, "
                                              "then pause and resume listening in the tray menu.")
+        return False
 
     def _register_hotkeys(self) -> None:
         hk = self.ctx.config.data.hotkeys

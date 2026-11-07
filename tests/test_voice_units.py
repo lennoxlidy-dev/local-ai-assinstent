@@ -336,3 +336,48 @@ def test_player_without_output_device_does_not_hang(monkeypatch):
     with pytest.raises(OSError):
         p.play(np.ones(100, np.float32))
     assert not p.busy and p.wait(0.1)
+
+
+# ---------------------------------------------------------------------- silent microphone
+def test_a_silent_microphone_is_reported_once(tmp_path):
+    """Windows' microphone privacy switch makes the device deliver exact zeros - tell the user how to fix it."""
+    from assistant.core.context import bootstrap
+    from assistant.voice.pipeline import VoicePipeline
+
+    ctx = bootstrap("cli", home=str(tmp_path / "home"), detect_hardware="off")
+    notes = []
+    ctx.bus.subscribe("ui.notify", lambda e: notes.append(e.data["message"]))
+
+    def pipeline():
+        p = VoicePipeline.__new__(VoicePipeline)        # only the silence check, no speech models needed
+        p.ctx, p._silent_s, p._heard_sound = ctx, 0.0, False
+        return p
+
+    p = pipeline()
+    for _ in range(int(20 * 16000 / 640)):              # 20 s of digital silence in 40 ms blocks
+        p._check_silence(np.zeros(640, np.float32))
+    assert len(notes) == 1 and "Let desktop apps access your microphone" in notes[0]
+    q = pipeline()
+    q._check_silence((np.random.default_rng(1).standard_normal(640) * 1e-4).astype(np.float32))  # a quiet room
+    assert q._heard_sound and len(notes) == 1
+
+
+# ---------------------------------------------------------------------- icons
+def test_icons_are_drawn_at_every_size():
+    from PySide6.QtGui import QColor, QGuiApplication
+
+    from assistant.ui.icons import SIZES, app_icon, orb_icon
+
+    QGuiApplication.instance() or QGuiApplication([])
+    for icon in (app_icon(), app_icon("#22C55E"), app_icon("not a colour"), orb_icon(paused=True, game_mode=True),
+                 orb_icon(listening=True)):
+        assert not icon.isNull()
+        for s in SIZES:
+            img = icon.pixmap(s, s).toImage()
+            assert img.width() == s
+            assert img.pixelColor(0, 0).alpha() == 0                       # round: transparent corners
+    img = app_icon().pixmap(64, 64).toImage()
+    centre = img.pixelColor(32, 32)                                        # the middle bar of the waveform
+    assert centre.red() > 230 and centre.green() > 230 and centre.blue() > 230
+    edge = img.pixelColor(8, 32)                                           # coloured body
+    assert edge.alpha() > 200 and edge != QColor("white")

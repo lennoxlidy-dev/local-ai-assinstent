@@ -90,6 +90,9 @@ class SelfTest(QObject):
         self.problems += errors
         self._step(f"{n} QML files compile", not errors)
         self._step("popup window loaded", self.tray.popup.view is not None)
+        from PySide6.QtGui import QGuiApplication
+
+        self._step("app icon set (taskbar, title bars)", not QGuiApplication.windowIcon().isNull())
         for _ in range(600):                   # the tool system starts right after the tray
             if self.tray.tools is not None:
                 break

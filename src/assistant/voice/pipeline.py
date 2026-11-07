@@ -424,6 +424,10 @@ class VoicePipeline:
                 self.ctx.bus.publish("voice.rejected", score=score)
                 self._back_to_idle(s)
                 return
+        if self.ctx.config.data.privacy.save_audio:      # off by default: audio normally never leaves memory
+            from .recordings import save
+
+            save(self.ctx, audio, s.kind)
         command = strip_name(text, name, variants)
         if s.kind == "wake":
             if cfg.wake_double_check and text and name_position(text, name, variants) < 0:

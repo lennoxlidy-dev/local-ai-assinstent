@@ -68,6 +68,7 @@ class TrayApp(QObject):
         self.voice: Any = None            # VoiceStack once the voice models are loaded
         self.confirmer: Any = None
         self.setup_window: Any = None     # the setup wizard while it is open
+        self.settings_window: Any = None  # the settings window while it is open
         self.downloads: Any = None        # SetupManager (background model downloads)
         self.popup = PopupController(ctx, on_submit=self._submit)
         self.hotkeys = HotkeyManager()
@@ -150,7 +151,8 @@ class TrayApp(QObject):
             return
         apps = self.tools.services["apps"]
         env = WizardEnv(ctx=self.ctx, policy=self.tools.policy, routines=self.tools.services["routines"],
-                        app_names=lambda: [a.name for a in apps.apps()], first_run=first_run)
+                        app_names=lambda: [a.name for a in apps.apps()], first_run=first_run,
+                        policy_changed=self.tools.reload_policy)
 
         def warm_up() -> None:      # app list + GPU info are needed a few questions later
             from ..core import hardware
@@ -175,7 +177,10 @@ class TrayApp(QObject):
             self._setup_done()
 
     def _setup_done(self) -> None:
+        from ..core.proc import trim_memory
+
         self.setup_window = None
+        QTimer.singleShot(500, trim_memory)
         self.force_setup = False
         name = self.ctx.config.data.general.assistant_name
         if self.voice is None:
@@ -384,9 +389,48 @@ class TrayApp(QObject):
         if msg in ("show", "settings"):
             self.open_settings()
 
-    def open_settings(self) -> None:
-        # The real settings window arrives in milestone 6; until then edit the file.
-        open_path(self.ctx.paths.config_file, edit=True)
+    def open_settings(self, tab: str = "") -> None:
+        """The settings window: created on demand, freed again when it is closed."""
+        from .settings import SettingsDeps, SettingsWindow
+
+        if self.tools is None:
+            self.tray.notify("", "Still starting up - try again in a moment.")
+            return
+        if self.settings_window is not None:
+            self.settings_window.show(tab)
+            return
+        deps = SettingsDeps(ctx=self.ctx, tools=self.tools, assistant=self.assistant, llm=self.llm,
+                            voice=lambda: self.voice, popup=self.popup if self.popup.view is not None else None,
+                            downloads=self._download_manager, open_setup=lambda: self.open_setup(first_run=False),
+                            pause_voice=self._settings_pause_voice, suspend_hotkeys=self._suspend_hotkeys)
+        self.settings_window = SettingsWindow(deps)
+        self.settings_window.closed.connect(self._settings_closed)
+        if not self.settings_window.show(tab):
+            self.settings_window = None
+            open_path(self.ctx.paths.config_file, edit=True)    # fallback: the file itself
+
+    def _settings_closed(self) -> None:
+        from ..core.proc import trim_memory
+
+        self.settings_window = None
+        QTimer.singleShot(500, trim_memory)      # after Qt has deleted the window and its QML engine
+        log.info("settings window closed and freed")
+
+    def _download_manager(self) -> Any:
+        from ..onboarding.downloads import SetupManager
+
+        if self.downloads is None:
+            self.downloads = SetupManager(self.ctx)
+        return self.downloads
+
+    def _settings_pause_voice(self, on: bool) -> None:
+        """Calibration / voice-lock recording in the settings: the wake word must not hear the takes."""
+        if self.voice is None:
+            return
+        if on:
+            threading.Thread(target=self.voice.pipeline.set_paused, args=(True,), daemon=True).start()
+        elif not self.ctx.state.paused:
+            threading.Thread(target=self._set_voice_paused, args=(False,), daemon=True).start()
 
     def _on_config_file_changed(self, path: str) -> None:
         self._reload_timer.start()
@@ -407,6 +451,8 @@ class TrayApp(QObject):
             self.downloads.cancel()
         if self.setup_window is not None:
             self.setup_window.voice.close()
+        if self.settings_window is not None:
+            self.settings_window.close()
         self.hotkeys.stop()
         if self.voice is not None:
             self.voice.pipeline.stop()

@@ -255,6 +255,7 @@ def _apply_folders(env: WizardEnv, value: Any) -> None:
             continue
     env.policy.policy.folders = [r for r in rules if r.path]
     env.policy.save()
+    env.policy_changed()
 
 
 def _cap_rows(env: WizardEnv) -> list[Option]:

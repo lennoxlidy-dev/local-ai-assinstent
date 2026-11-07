@@ -1,4 +1,5 @@
 import QtQuick
+import "../common"
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
@@ -7,7 +8,7 @@ Item {
     property var q: ({})
     property var sel: q.value
     property string other: ""
-    readonly property var th: setup.theme
+    readonly property var th: look.colors
     readonly property bool isOther: page.q.allowOther === true && other.length > 0
     function currentValue() { return isOther ? other : sel }
     function known(v) { var o = page.q.options || []; for (var i = 0; i < o.length; i++) if (o[i].value === v) return true; return false }

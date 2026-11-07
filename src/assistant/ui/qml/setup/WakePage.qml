@@ -1,4 +1,5 @@
 import QtQuick
+import "../common"
 import QtQuick.Layouts
 import ".."
 
@@ -6,7 +7,7 @@ import ".."
 Item {
     id: page
     property var q: ({})
-    readonly property var th: setup.theme
+    readonly property var th: look.colors
     readonly property var st: setup.pageState || ({})
     readonly property bool busy: st.step === "starting" || st.step === "recording" || st.step === "processing"
     ColumnLayout {

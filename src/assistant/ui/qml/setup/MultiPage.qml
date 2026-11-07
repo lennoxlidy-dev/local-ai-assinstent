@@ -1,4 +1,5 @@
 import QtQuick
+import "../common"
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 

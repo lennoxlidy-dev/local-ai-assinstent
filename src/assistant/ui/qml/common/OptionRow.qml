@@ -13,7 +13,7 @@ Rectangle {
     signal picked()
     signal doublePicked()
     signal previewed()
-    readonly property var th: setup.theme
+    readonly property var th: look.colors
     Layout.fillWidth: true
     implicitHeight: Math.max(50, col.implicitHeight + 20)
     radius: 11

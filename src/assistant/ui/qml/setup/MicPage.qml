@@ -1,4 +1,5 @@
 import QtQuick
+import "../common"
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
@@ -6,7 +7,7 @@ Item {
     id: page
     property var q: ({})
     property string device: q.value || ""
-    readonly property var th: setup.theme
+    readonly property var th: look.colors
     readonly property var st: setup.pageState || ({})
     function currentValue() { return device }
     ColumnLayout {

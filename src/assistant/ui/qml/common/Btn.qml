@@ -7,8 +7,8 @@ Rectangle {
     property bool primary: false
     property bool small: false
     signal clicked()
-    readonly property var th: setup.theme
-    implicitWidth: Math.max(small ? 60 : 88, label.implicitWidth + (small ? 22 : 34))
+    readonly property var th: look.colors
+    implicitWidth: Math.max(small ? (text.length <= 2 ? 30 : 60) : 88, label.implicitWidth + (small ? 22 : 34))
     implicitHeight: small ? 30 : 38
     radius: 9
     opacity: enabled ? 1.0 : 0.45

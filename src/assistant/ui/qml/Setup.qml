@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import "setup"
+import "common"
 
 // The setup wizard: one question at a time. Data and actions come from the `setup` object
 // (SetupModel in ui/onboarding.py); each kind of question has its own page in setup/.
@@ -14,7 +15,7 @@ ApplicationWindow {
     color: th.bg
     font.family: th.font
     property bool allowClose: false
-    readonly property var th: setup.theme
+    readonly property var th: look.colors
 
     palette.window: th.bg
     palette.windowText: th.fg

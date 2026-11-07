@@ -1,4 +1,5 @@
 import QtQuick
+import "../common"
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
@@ -6,7 +7,7 @@ Item {
     id: page
     property var q: ({})
     property var items: (q.value || []).map(function(x) { return Object.assign({}, x) })
-    readonly property var th: setup.theme
+    readonly property var th: look.colors
     function currentValue() { return items }
     function put(i, k, v) { var a = items.slice(); a[i] = Object.assign({}, a[i]); a[i][k] = v; items = a }
     ScrollView {

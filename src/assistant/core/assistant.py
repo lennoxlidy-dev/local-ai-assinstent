@@ -79,6 +79,10 @@ class Assistant:
         purged = self.conversations.purge(ctx.config.data.privacy.retention_days)
         if purged:
             log.info("retention: deleted %d old conversations", purged)
+        from ..voice.recordings import purge as purge_recordings
+
+        if purge_recordings(ctx, ctx.config.data.privacy.retention_days):
+            log.info("retention: deleted old recordings")
 
     # ------------------------------------------------------------------ helpers
     def _t(self, key: str, **kw: Any) -> str:

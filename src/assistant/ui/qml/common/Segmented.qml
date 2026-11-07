@@ -6,7 +6,7 @@ Row {
     property var options: []
     property var value
     signal chosen(var value)
-    readonly property var th: setup.theme
+    readonly property var th: look.colors
     spacing: 0
     Repeater {
         model: seg.options

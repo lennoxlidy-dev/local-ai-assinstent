@@ -23,6 +23,7 @@ from ..onboarding.questions import ACCESS_OPTIONS, Question, label, spoken
 from ..onboarding.voice import ENROLL_SENTENCES, SetupVoice, level_verdict
 from ..onboarding.wizard import Wizard
 from .qtmodel import model_class
+from .theme import Look, is_dark
 
 log = logging.getLogger(__name__)
 
@@ -76,13 +77,8 @@ UI = {
            "downloads": "Downloads", "yes": "Ja", "no": "Nein"},
 }
 
-DARK = {"bg": "#16161A", "card": "#1F1F25", "card2": "#26262E", "field": "#1A1A20", "fg": "#F2F3F5",
-        "dim": "#A3A7B0", "border": "#33343C", "warn": "#F5B44A", "ok": "#3DD68C", "danger": "#F2555A"}
-LIGHT = {"bg": "#F4F5F8", "card": "#FFFFFF", "card2": "#ECEDF2", "field": "#FFFFFF", "fg": "#1B1C20",
-         "dim": "#5E626B", "border": "#D9DBE2", "warn": "#B26B00", "ok": "#178A52", "danger": "#C9333A"}
-
 SetupModelBase: Any = model_class("SetupModelBase", {
-    "q": ("QVariantMap", {}), "ui": ("QVariantMap", {}), "theme": ("QVariantMap", {}), "atEnd": (bool, False),
+    "q": ("QVariantMap", {}), "ui": ("QVariantMap", {}), "atEnd": (bool, False),
     "status": (str, ""), "statusKind": (str, "info"), "orbMode": (str, "idle"), "level": (float, 0.0),
     "voiceMode": (bool, True), "speakMode": (bool, True), "canListen": (bool, False), "canSpeak": (bool, False),
     "download": (str, ""), "downloadPct": (float, 0.0), "downloadActive": (bool, False),
@@ -207,6 +203,7 @@ class SetupWindow(QObject):
         self.model = SetupModel()
         self.engine: Any = None
         self.window: Any = None
+        self.look: Any = None
         self._unclear = 0
         self._ack = ""
         self._closing = False
@@ -232,7 +229,7 @@ class SetupWindow(QObject):
                         for t in ("setup.progress", "setup.job_done", "setup.job_started", "setup.failed",
                                   "setup.finished", "setup.retry")]
         self._update_availability()
-        m.set(theme=self._theme(), voiceMode=True, speakMode=bool(ctx.config.data.voice.tts_enabled))
+        m.set(voiceMode=True, speakMode=bool(ctx.config.data.voice.tts_enabled))
         self._refresh()
         self._update_download()
 
@@ -246,6 +243,9 @@ class SetupWindow(QObject):
             self.window.requestActivate()
             return True
         engine = QQmlApplicationEngine()
+        self.look = Look(self.ctx)
+        self.look.setParent(engine)          # freed together with the engine, after the QML items
+        engine.rootContext().setContextProperty("look", self.look)
         engine.rootContext().setContextProperty("setup", self.model)
         engine.load(QUrl.fromLocalFile(str(QML)))
         roots = engine.rootObjects()
@@ -267,19 +267,7 @@ class SetupWindow(QObject):
         return True
 
     def _dark(self) -> bool:
-        return self.ctx.config.data.appearance.theme != "light"
-
-    def _theme(self) -> dict[str, str]:
-        t = dict(DARK if self._dark() else LIGHT)
-        t["accent"] = self.ctx.config.data.appearance.accent
-        t["font"] = "Segoe UI Variable Text" if self._is_win11() else "Segoe UI"
-        return t
-
-    @staticmethod
-    def _is_win11() -> bool:
-        from ..win.dwm import windows_build
-
-        return windows_build() >= 22000
+        return is_dark(self.ctx.config.data.appearance.theme)
 
     # ------------------------------------------------------------------ view model
     def t(self, key: str, **kw: Any) -> str:
@@ -288,7 +276,7 @@ class SetupWindow(QObject):
 
     def _refresh(self) -> None:
         m, w, lang = self.model, self.wizard, self.env.lang
-        m.set(ui=UI.get(lang, UI["en"]), theme=self._theme())
+        m.set(ui=UI.get(lang, UI["en"]))
         q = w.current
         if q is None:
             m.set(atEnd=True, q={"id": "finish", "kind": "finish", "page": "finish"}, finish=self._finish_info(),
@@ -607,6 +595,9 @@ class SetupWindow(QObject):
         if self.engine is not None:
             self.engine.deleteLater()
             self.engine = None
+        if self.look is not None:
+            self.look.close()
+            self.look = None
         self.completed.emit()
 
 

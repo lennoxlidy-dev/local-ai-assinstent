@@ -314,6 +314,15 @@ class PopupController(QObject):
             log.debug("TIMING stage=wake_to_popup ms=%.1f", (time.time() - self._wake_ts) * 1000)
             self._wake_ts = None
 
+    def demo(self, text: str) -> None:
+        """Settings > Appearance: show what an answer looks like (fades like a real one)."""
+        self._new_turn()
+        self._result = "done"
+        self.model.set(transcript="", answer=text, progress="")
+        self._refresh()
+        self.show()
+        self._schedule_fade()
+
     # ------------------------------------------------------------------ mini chat
     def open_chat(self) -> None:
         self.show()

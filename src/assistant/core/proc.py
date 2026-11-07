@@ -35,3 +35,22 @@ def run_hidden(cmd: Sequence[str] | str, *, timeout: float = 30.0, cwd: str | os
         stdin=None if input is not None else subprocess.DEVNULL,
         creationflags=hidden_flags(low_priority),
     )
+
+
+def trim_memory() -> None:
+    """Give memory back to the system after a big window closed (settings, setup wizard).
+
+    Windows: empty the working set (pages come back only if used again). Linux: return freed heap.
+    """
+    import ctypes
+    import gc
+
+    gc.collect()
+    try:
+        if sys.platform == "win32":
+            k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            k32.K32EmptyWorkingSet(k32.GetCurrentProcess())
+        elif sys.platform.startswith("linux"):
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass

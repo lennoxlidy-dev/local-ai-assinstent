@@ -24,6 +24,7 @@ class WizardEnv:
     app_names: Callable[[], list[str]] = lambda: []  # installed apps (Start menu + Store)
     vram_mb: int = 0                                 # largest NVIDIA GPU, 0 = none found
     first_run: bool = True
+    policy_changed: Callable[[], None] = lambda: None    # folder rules are compiled: rebuild them
     user_name_guess: Callable[[], str] = field(default=lambda: guess_user_name())
     language_guess: Callable[[], str] = field(default=lambda: guess_language())
 

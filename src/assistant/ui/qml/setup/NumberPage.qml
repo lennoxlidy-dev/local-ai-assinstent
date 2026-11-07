@@ -1,11 +1,12 @@
 import QtQuick
+import "../common"
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 Item {
     id: page
     property var q: ({})
-    readonly property var th: setup.theme
+    readonly property var th: look.colors
     function currentValue() { return Math.round(slider.value * 100) / 100 }
     ColumnLayout {
         width: Math.min(parent.width, 520)

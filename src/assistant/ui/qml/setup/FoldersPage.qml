@@ -1,4 +1,5 @@
 import QtQuick
+import "../common"
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
@@ -6,7 +7,7 @@ Item {
     id: page
     property var q: ({})
     property var rules: (q.value || []).slice()
-    readonly property var th: setup.theme
+    readonly property var th: look.colors
     function currentValue() { return rules }
     function label(v) { var a = page.q.access || []; for (var i = 0; i < a.length; i++) if (a[i].value === v) return a[i].label; return v }
     function setAccess(i, v) { var r = rules.slice(); r[i] = Object.assign({}, r[i], {access: v}); rules = r }

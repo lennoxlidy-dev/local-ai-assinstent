@@ -225,3 +225,10 @@ def test_text_wizard(env):
     assert c.llm.profile == "fast" and c.general.onboarding_done
     assert {r.name for r in env.routines.all()} == {"Spielmodus", "Gute Nacht"}
     assert out[-1].strip() == "Einrichtung gespeichert."
+
+
+def test_folder_answer_rebuilds_the_path_rules(env):
+    calls = []
+    env.policy_changed = lambda: calls.append(True)
+    BY_ID["folders"].apply(env, [{"path": "D:\\Work", "access": "full", "note": ""}])
+    assert calls == [True]

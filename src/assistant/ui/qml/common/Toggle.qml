@@ -7,7 +7,7 @@ Rectangle {
     property string icon: ""
     property bool checked: false
     signal toggled(bool on)
-    readonly property var th: setup.theme
+    readonly property var th: look.colors
     implicitHeight: 32
     implicitWidth: row.implicitWidth + 22
     radius: 16

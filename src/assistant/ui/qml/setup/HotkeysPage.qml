@@ -1,4 +1,5 @@
 import QtQuick
+import "../common"
 import QtQuick.Layouts
 
 // Click a field, then press the new key combination (global hotkeys are paused meanwhile).
@@ -6,7 +7,7 @@ Item {
     id: page
     property var q: ({})
     property var vals: Object.assign({}, q.value || {})
-    readonly property var th: setup.theme
+    readonly property var th: look.colors
     function currentValue() { return vals }
     function put(k, v) { var o = Object.assign({}, vals); o[k] = v; vals = o }
     function keyName(key) {

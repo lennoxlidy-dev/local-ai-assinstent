@@ -1,11 +1,12 @@
 import QtQuick
+import "../common"
 import QtQuick.Layouts
 import ".."
 
 Item {
     id: page
     property var q: ({})
-    readonly property var th: setup.theme
+    readonly property var th: look.colors
     readonly property var info: setup.finish || ({})
     ColumnLayout {
         anchors.horizontalCenter: parent.horizontalCenter

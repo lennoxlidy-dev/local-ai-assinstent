@@ -45,13 +45,15 @@ class SetupVoice:
     ENROLL_S = 4.5        # one voice-lock sentence
 
     def __init__(self, ctx: AppContext, on_event: Event, *, source_factory: Callable[[], AudioSource] | None = None,
-                 player: Any = None):
+                 player: Any = None, stt: Any = None, speaker: Any = None):
+        """``stt`` / ``speaker``: borrow the running voice stack's models (not unloaded on close)."""
         self.ctx = ctx
         self.on_event = on_event
         self.source_factory = source_factory or (lambda: MicSource(ctx.config.data.voice.input_device))
-        self._player = player
-        self._speaker: Any = None
-        self._stt: Any = None
+        self._player = player if player is not None else (speaker.player if speaker is not None else None)
+        self._speaker: Any = speaker
+        self._stt: Any = stt
+        self._borrowed = {id(x) for x in (stt, speaker) if x is not None}
         self._wake: Any = None
         self._lock_model: Any = None
         self._q: queue.Queue[tuple[int, Callable[[int], None]] | None] = queue.Queue()
@@ -130,10 +132,10 @@ class SetupVoice:
                 self.on_event("idle", {})
         self._submit(job)
 
-    def say(self, text: str, voice: str | None = None) -> None:
+    def say(self, text: str, voice: str | None = None, lang: str | None = None) -> None:
         def job(gen: int) -> None:
             if self.available()["speak"]:
-                self._say(text, gen, voice)
+                self._say(text, gen, voice, lang)
             if gen == self._gen:
                 self.on_event("idle", {})
         self._submit(job)
@@ -221,9 +223,9 @@ class SetupVoice:
         self._q.put(None)
         stt, sp = self._stt, self._speaker
         self._stt = self._speaker = self._wake = self._lock_model = None
-        if stt is not None:
+        if stt is not None and id(stt) not in self._borrowed:
             stt.unload()                 # ~870 MB; the tray app loads its own when it is needed
-        if sp is not None:
+        if sp is not None and id(sp) not in self._borrowed:
             sp.unload()
 
     # ------------------------------------------------------------------ worker
@@ -241,9 +243,9 @@ class SetupVoice:
                 log.exception("setup voice task failed")
                 self.on_event("error", {"message": str(e)})
 
-    def _say(self, text: str, gen: int, voice: str | None = None) -> None:
+    def _say(self, text: str, gen: int, voice: str | None = None, lang: str | None = None) -> None:
         c = self.ctx.config.data
-        lang = c.general.language
+        lang = lang or c.general.language
         sp = self.speaker()
         self.on_event("speaking", {})
         tok = self._token

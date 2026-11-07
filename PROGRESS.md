@@ -11,8 +11,8 @@ Living status file. Read this first when continuing in a new session (together w
 | 3 | LLM server management (llama.cpp), tool-calling agent loop, fast-path intents | ✅ done (tested with real llama.cpp + Qwen3.5/Gemma 4 on CPU; GPU latency pending) |
 | 4 | Voice: mic → wake word → VAD → STT → popup, then TTS; WAV test harness | ✅ done (real speech models tested end to end via WAV harness on CPU; mic/popup/hotkeys on Windows pending) |
 | 5 | Onboarding wizard + profile/memory | ✅ done (wizard logic, voice answers and calibration tested with real models; GUI rendered offscreen - Windows run pending) |
-| 6 | Settings/permissions GUI + history | ⏳ next |
-| 7 | Performance tuning, game mode, packaging (install.ps1/.bat/.exe), README | — |
+| 6 | Settings/permissions GUI + history | ✅ done (all 10 tabs loaded and exercised offscreen; Windows run pending) |
+| 7 | Performance tuning, game mode, packaging (install.ps1/.bat/.exe), README | ⏳ next |
 
 ## Architecture (as built so far)
 
@@ -47,6 +47,12 @@ src/assistant/
     qml/Orb.qml        animated orb: rings with the mic level, spin while thinking, pulse while speaking
     onboarding.py      setup wizard window: SetupModel (QML bridge) + SetupWindow (voice events, downloads, pages)
     qml/Setup.qml      wizard shell (header, progress, page loader, downloads, buttons); qml/setup/*.qml pages
+    settings.py        settings window: SettingsModel (``settings.call(action, args)``) + SettingsWindow (do_* actions)
+    settings_text.py   settings texts EN/DE
+    qml/Settings.qml   sidebar + lazily loaded tab; qml/settings/*Tab.qml (10 tabs)
+    qml/common/*.qml   shared controls: Btn, Card, SettingRow, ToggleSwitch, InputField, Dropdown, ValueSlider,
+                       KeyField, Segmented, OptionRow, DangerBtn, Toggle
+    theme.py           Look: the live colour palette (``look.colors``) for the QML windows
     qtmodel.py         helper: QObject view-models with notifying properties for QML
   onboarding/
     questions.py       the 27 setup questions (EN/DE text, defaults, options, validation, apply -> config/policy/db)
@@ -100,6 +106,7 @@ src/assistant/
                        barge-in, cancel, push-to-talk, spoken confirmations, mic reopen
     yesno.py           spoken yes/no/always/stop (EN+DE), conservative
     calibration.py     record from the mic; wake-word calibration helper
+    recordings.py      optional WAV copies of voice requests (privacy.save_audio, off by default) + retention
     runtime.py         build_voice() from config (+ live config changes); harness.py: --say / --voice-test
   win/
     hotkeys.py         RegisterHotKey thread: push-to-talk (press/hold), panic
@@ -109,7 +116,7 @@ src/assistant/
                        send2trash IFileOperation, Everything SDK, SHGetKnownFolderPath)
     inputs.py          SendInput (fixed-width ctypes structs, unit-tested layout)
     com.py             per-thread COM init; WinRT worker thread (MTA + asyncio)
-tests/                 pytest (339 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
+tests/                 pytest (353 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
                        the real speech models - each skipped when not installed)
 bench/                 llm_bench.py + cases.py: GPU latency + tool-calling accuracy per model
 scripts/               dev-setup.ps1, setup-models.bat, run-tray.bat, run-debug.bat, run-cli.bat
@@ -350,6 +357,43 @@ Milestone 5 decisions:
 - **GUI tech**: the wizard is a normal window (QML + Qt Quick Controls "Basic" style, software renderer like
   the popup, dark title bar via DWM). It is loaded on demand and freed when it closes.
 
+Milestone 6 decisions:
+
+- **Settings window = ten tabs in QML** (General, Voice & wake word, AI model & performance, Permissions, Apps &
+  aliases, Routines, History, Privacy, Appearance, Action log), dark/light like the wizard, English/German
+  following `general.language`. Every change is saved immediately (no OK/Apply), validated by the same code as
+  config.toml (invalid input shows the reason and the control snaps back). Things that only apply after a model
+  restart say so and offer a Restart button.
+- **Loaded on demand, freed when closed**: nothing of it exists until you open it; only the open tab is
+  instantiated; closing deletes the window, its QML engine and all tab data, then trims the working set. Measured
+  here: opening adds ~63 MB; after closing ~53 MB stays (29 MB Qt Quick library code + fonts that stay mapped once
+  loaded, plus Qt's QML type caches) and it does **not** grow over repeated open/close cycles (5 cycles: flat).
+  Idle with the window closed should stay under the 300 MB target (estimate: the ~205 MB idle measured in M4
+  + ~53 MB after the first open = ~260 MB; to be confirmed on Windows).
+- **Opening it**: tray menu "Settings…", double-click on the tray icon, or starting the app a second time.
+  General has "Run the setup wizard again" plus shortcuts to config.toml, the data folder and the logs.
+- **Voice tab** can calibrate the wake word (say the name 3x) and record the voice lock right there - the running
+  wake word is paused meanwhile so it doesn't react to the takes - shows a live microphone level, previews each
+  voice in English and German, plays a test sound on the chosen speaker, and changes devices without a restart.
+- **Permissions tab**: Allow/Ask/Block per capability (admin and installs can't be "allow"), the always-ask list
+  (admin is locked on), and folder rules (full / read only / always ask / blocked). Folder rules are compiled into
+  the path checker, so a change now rebuilds it immediately - this also fixes the setup wizard, where new folder
+  rules only took effect after a restart.
+- **Routines tab**: list + editor (name, description, steps as action + JSON details, reorder, add/remove);
+  every step is validated with the tool's own schema before saving; "Run now" runs it through the normal
+  permission checks; templates (gaming mode, work mode, music time, good night).
+- **History tab**: full-text search (FTS5, highlighted snippets), conversation view, rename, delete (click twice
+  to confirm), export as Markdown or JSON. Lowering the retention deletes older conversations right away.
+- **Privacy tab**: conversations on/off + retention + delete all; what the assistant remembers (edit, delete, add,
+  forget everything); recordings; transcript logging. `privacy.save_audio` existed as a setting but did nothing -
+  it now keeps a WAV of each voice request in `%LOCALAPPDATA%\Assistant\recordings` (off by default, same
+  retention as conversations).
+- **Action log tab**: every tool call with the permission decision (allowed / approved by you / declined /
+  blocked / invalid / cancelled) and outcome; search, filters (asked, declined, blocked, errors), details per
+  row, live updates while open, export CSV/JSON.
+- **Appearance tab**: theme, accent (swatches or hex), popup position (picked on a mini screen), fade time,
+  acrylic on/off, and a "Show a test popup" button. Theme/accent changes restyle open windows immediately.
+
 ## How to test
 
 ### Automated (any OS)
@@ -500,6 +544,28 @@ Permissions file: `%APPDATA%\Assistant\permissions.toml` (editable; invalid entr
 7. Please report: which spoken answers it misunderstood (the "I heard: …" line shows the transcript), anything
    that looks off in the wizard, and whether the downloads/ETA behaved.
 
+### Milestone 6 on Windows (settings window)
+
+1. `scripts\run-debug.bat`, then open the settings: tray menu "Settings…", double-click the tray icon, or start
+   `scripts\run-tray.bat` again while it runs.
+2. Go through the tabs; every change is saved at once (watch `config.toml` / `permissions.toml`):
+   - General: change your name/personality, the language (the window switches to German), autostart.
+   - Voice: "Calibrate: say the name 3x"; talk and watch the level bar; switch microphone; ▶ voice previews;
+     record the voice lock, then delete it; record a new push-to-talk key.
+   - AI model: switch profile/models, then Restart; "Download missing models" if something is missing.
+   - Permissions: set "Mouse & keyboard" to Allow, add a trusted folder and ask the assistant to create a file
+     there (no question now), set "Delete files" to Block and ask it to delete something (refused).
+   - Apps: add an alias ("post" → Outlook) and say "open post"; desktop rules.
+   - Routines: create one from a template, edit a step (try invalid JSON - you get the reason), Run now.
+   - History: search a word you said earlier, rename, export Markdown/JSON, delete.
+   - Privacy: edit/delete remembered facts; turn on recordings, make a voice request, "Open folder" shows the WAV.
+   - Appearance: accent colour + popup position, then "Show a test popup".
+   - Action log: the actions you just triggered, with filters and CSV export.
+3. Close the window and check Task Manager: the memory goes back down (not to the exact starting value - the
+   Qt Quick libraries stay loaded - but it must not grow when you open/close the settings repeatedly).
+4. Please report: anything that doesn't save or doesn't take effect, layout problems at your scaling (125/150 %),
+   and whether the dark title bar and the Segoe Fluent icons in the sidebar look right.
+
 ## Benchmark results (tool-calling accuracy, measured here on CPU - latency must be re-measured on the GPU)
 
 24 realistic EN/DE cases on a simulated PC (real agent loop, tool registry and permission gate; fake OS
@@ -549,4 +615,8 @@ action that no tool performed) and a fast-path "remember/merk dir" intent. Laten
   wizard so far; permission questions in the popup still show the English summaries. Unusual names can be
   misheard when answered by voice (in tests "Lennox" was transcribed as "Linux" half of the time) - the wizard
   shows "I heard: …", so such a name is best typed.
-- Next: M6 - settings window (10 tabs, every wizard answer editable), permissions GUI, conversation history.
+- M6 open points: the settings window was loaded and exercised offscreen (all tabs, both languages, both themes,
+  no QML warnings; every action covered by tests) but has not run on Windows yet. ~53 MB stay resident after
+  closing it (libraries + Qt caches, not growing); a separate process would be needed to give that back too.
+- Next: M7 - tuning against the performance targets, fullscreen-game detection for game mode, one-click
+  installer (install.ps1 + .bat), .exe build, README with troubleshooting.

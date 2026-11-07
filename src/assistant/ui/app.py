@@ -281,9 +281,14 @@ class TrayApp(QObject):
                 if self.voice is None and self.ctx.config.data.general.onboarding_done:
                     threading.Thread(target=self._init_voice, name="voice-init", daemon=True).start()
             if event.data.get("failed") or event.data.get("error"):
+                from ..onboarding.downloads import describe
+
+                text = describe(self.downloads.status, self.ctx.config.data.general.language) \
+                    if self.downloads is not None else ""
                 self.ctx.bus.publish(Topic.NOTIFY, title="Downloads", level="warning", message=(
-                    event.data.get("error") or "Some downloads failed. They are retried at the next start "
-                    "(or open the setup wizard from the tray menu)."))
+                    text if event.data.get("outdated") or event.data.get("error") else
+                    "Some downloads failed. They are retried at the next start (or open the setup wizard from the "
+                    "tray menu)."))
 
     # ------------------------------------------------------------------ voice
     def _init_voice(self) -> None:

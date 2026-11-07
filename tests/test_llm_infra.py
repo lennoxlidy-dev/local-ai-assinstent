@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 
 from assistant.core.cancel import CancelToken, Cancelled
-from assistant.llm.download import DownloadError, download
-from assistant.llm.models import CATALOG, choose_model, is_installed, model_files
+from assistant.llm.download import DownloadError, ServerFileChanged, download
+from assistant.llm.models import CATALOG, REVISIONS, choose_model, is_installed, model_files
 from assistant.llm.server import LlamaServer, ServerError, ServerOptions, ServerState, build_args
 from assistant.llm.setup import current_server, install_llama, select_assets
 
@@ -29,6 +29,7 @@ class FileServer:
         self.data = data
         self.cut_after = None
         self.ranges = []
+        self.sent = 0                        # body bytes written (to see that nothing big was transferred)
         outer = self
 
         class H(BaseHTTPRequestHandler):
@@ -53,7 +54,12 @@ class FileServer:
                     self.wfile.flush()
                     self.connection.shutdown(2)
                     return
-                self.wfile.write(body)
+                try:
+                    for i in range(0, len(body), 64 * 1024):
+                        self.wfile.write(body[i:i + 64 * 1024])
+                        outer.sent += min(64 * 1024, len(body) - i)
+                except OSError:                      # the client hung up (it saw a wrong size)
+                    pass
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
@@ -80,11 +86,36 @@ def test_download_resumes_and_verifies(fs, tmp_path):
 
 
 def test_download_checksum_mismatch(fs, tmp_path):
-    with pytest.raises(DownloadError, match="checksum"):
+    with pytest.raises(DownloadError, match="checksum") as e:
         download(fs.url, tmp_path / "x.bin", sha256="0" * 64, size=len(DATA))
+    assert not isinstance(e.value, ServerFileChanged)                 # same size: may be a glitch, retryable
     assert not (tmp_path / "x.bin").exists() and not (tmp_path / "x.bin.part").exists()
-    with pytest.raises(DownloadError, match="closed after"):           # server has fewer bytes than promised
-        download(fs.url, tmp_path / "y.bin", size=len(DATA) + 1, retries=0)
+
+
+@pytest.mark.parametrize("delta", [+41388, -1])
+def test_download_notices_a_changed_server_file_at_once(fs, tmp_path, delta):
+    """Upstream replaced the file (Parakeet, Nov 2026): stop after the first response, don't download it all."""
+    with pytest.raises(ServerFileChanged, match="has changed") as e:
+        download(fs.url, tmp_path / "x.bin", sha256="0" * 64, size=len(DATA) - delta)
+    assert "x.bin" in str(e.value) and f"{len(DATA):,} bytes" in str(e.value)
+    assert fs.sent < len(DATA) // 2 and len(fs.ranges) == 1             # hung up early; no retries
+    assert not (tmp_path / "x.bin.part").exists()
+
+
+def test_download_resume_notices_a_changed_server_file(fs, tmp_path):
+    part = tmp_path / "x.bin.part"
+    part.write_bytes(DATA[:1000])                                      # left over from the old version
+    with pytest.raises(ServerFileChanged):
+        download(fs.url, tmp_path / "x.bin", size=len(DATA) + 5)
+    assert fs.ranges == ["bytes=1000-"] and not part.exists()
+
+
+def test_model_downloads_are_pinned_to_a_commit():
+    for spec in CATALOG.values():
+        for f in (spec.weights, spec.mmproj):
+            if f is not None:
+                assert f.url == f"https://huggingface.co/{f.repo}/resolve/{REVISIONS[f.repo]}/{f.file}"
+                assert len(REVISIONS[f.repo]) == 40
 
 
 def test_download_cancel(fs, tmp_path):

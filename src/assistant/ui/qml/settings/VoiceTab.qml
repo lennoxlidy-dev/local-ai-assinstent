@@ -23,7 +23,8 @@ ScrollView {
             visible: tab.v.installed === false
             title: tab.tr.voice_off
             Btn { Layout.topMargin: 6; primary: true; text: tab.tr.download_models; onClicked: settings.call("downloadModels", {}) }
-            Text { visible: (settings.download.text || "") !== ""; text: settings.download.text || ""; color: tab.th.dim; font.pixelSize: 12 }
+            Text { visible: (settings.download.text || "") !== ""; text: settings.download.text || ""; color: tab.th.dim; font.pixelSize: 12
+                   Layout.fillWidth: true; Layout.topMargin: 4; wrapMode: Text.Wrap }
         }
         Card {
             title: tab.tr.sec_wake

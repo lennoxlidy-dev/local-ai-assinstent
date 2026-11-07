@@ -1,7 +1,9 @@
 """Resumable, verified downloads (models, llama.cpp) - stdlib only.
 
 * resumes ``*.part`` files with HTTP Range requests
-* verifies size and SHA-256 before the file is renamed into place
+* verifies size and SHA-256 before the file is renamed into place; a server whose file has a
+  different size than the pinned one is detected from the first response (ServerFileChanged,
+  no point in retrying) instead of after downloading all of it
 * reports progress (for the tray/onboarding UI) and honours cancellation
 * uses the system proxy/certificates (urllib reads the Windows proxy settings)
 """
@@ -17,6 +19,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from ..core.cancel import CancelToken, Cancelled
 
@@ -28,6 +31,10 @@ USER_AGENT = "LocalAssistant/0.3 (+offline voice assistant; downloads models onl
 
 class DownloadError(Exception):
     pass
+
+
+class ServerFileChanged(DownloadError):
+    """The server has another version of the file than the pinned size/checksum: retrying can't help."""
 
 
 def sha256_file(path: Path, chunk: int = 4 << 20, cancel: CancelToken | None = None) -> str:
@@ -59,6 +66,9 @@ def download(url: str, dest: Path, *, sha256: str | None = None, size: int | Non
             break
         except Cancelled:
             raise
+        except ServerFileChanged as e:
+            part.unlink(missing_ok=True)          # (bytes of the old version, if any)
+            raise ServerFileChanged(f"{dest.name}: {e}") from None
         except (urllib.error.URLError, OSError, TimeoutError, http.client.HTTPException) as e:
             if isinstance(e, urllib.error.HTTPError) and e.code in (401, 403, 404):
                 raise DownloadError(f"{url}: HTTP {e.code} {e.reason}") from None
@@ -74,7 +84,7 @@ def download(url: str, dest: Path, *, sha256: str | None = None, size: int | Non
     got = part.stat().st_size
     if size is not None and got != size:
         part.unlink(missing_ok=True)
-        raise DownloadError(f"{dest.name}: got {got} bytes, expected {size}")
+        raise ServerFileChanged(f"{dest.name}: the file on the server has changed ({got:,} bytes instead of {size:,})")
     if sha256 is not None:
         digest = sha256_file(part, cancel=cancel)
         if digest != sha256:
@@ -101,6 +111,9 @@ def _fetch(url: str, part: Path, size: int | None, progress: Progress | None, ca
         status = getattr(resp, "status", 200)
         if have and status != 206:  # server ignored the range -> start over
             have = 0
+        server_size = _server_size(resp.headers, have)
+        if size is not None and server_size is not None and server_size != size:
+            raise ServerFileChanged(f"the file on the server has changed ({server_size:,} bytes instead of {size:,})")
         total = size or (int(resp.headers.get("Content-Length", 0)) + have) or 0
         mode = "ab" if have else "wb"
         t0, done0 = time.monotonic(), have
@@ -122,3 +135,13 @@ def _fetch(url: str, part: Path, size: int | None, progress: Progress | None, ca
                     progress(done, total, rate)
         if total and done < total:  # connection closed early -> retry resumes from here
             raise ConnectionError(f"connection closed after {done} of {total} bytes")
+
+
+def _server_size(headers: Any, have: int) -> int | None:
+    """Full size of the file on the server: Content-Range ("bytes 5-9/10") or Content-Length (+ resumed part)."""
+    rng = headers.get("Content-Range") or ""
+    if "/" in rng:
+        total = rng.rsplit("/", 1)[1].strip()
+        return int(total) if total.isdigit() else None
+    length = (headers.get("Content-Length") or "").strip()
+    return int(length) + have if length.isdigit() else None

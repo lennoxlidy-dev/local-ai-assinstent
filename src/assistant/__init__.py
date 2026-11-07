@@ -1,6 +1,6 @@
 """Local, voice-controlled AI assistant for Windows."""
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 #: Internal application id: used for folder names, registry values, the lock file.
 #: This is NOT the assistant's spoken name (that one is user-chosen, see config).

@@ -11,7 +11,9 @@
 * Voice lock: 3D-Speaker CAM++ speaker embeddings.
 
 Files come from the official k2-fsa/sherpa-onnx GitHub releases; SHA-256 values were
-computed from those downloads.
+computed from those downloads. Release files can be replaced upstream: the downloader then
+stops at once with "the file on the server has changed" (llm/download.py) and the pin here
+has to be updated after checking the new file.
 """
 
 from __future__ import annotations
@@ -53,9 +55,10 @@ VOICE_MODELS: dict[str, VoiceModel] = {m.id: m for m in (
                "sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01/tokens.txt"),
     VoiceModel("vad", "Voice activity detection (Silero v5)", f"{RELEASES}/asr-models/silero_vad_v5.onnx", 2313101,
                "6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396", "", "silero_vad_v5.onnx"),
+    # re-exported upstream on 2026-11-07 (same files and results; the earlier archive is no longer served)
     VoiceModel("stt", "Speech recognition (Parakeet TDT 0.6B v3)",
-               f"{RELEASES}/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2", 487170055,
-               "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf",
+               f"{RELEASES}/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2", 487211443,
+               "1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9",
                "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8", "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/tokens.txt"),
     VoiceModel("tts", "Speech output (Supertonic 3, 31 languages)",
                f"{RELEASES}/tts-models/sherpa-onnx-supertonic-3-tts-int8-2026-05-11.tar.bz2", 128774318,

@@ -185,6 +185,8 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         text: setup.download
                         color: th.dim
+                        wrapMode: Text.Wrap
+                        maximumLineCount: 2
                         elide: Text.ElideRight
                         font.pixelSize: 12
                     }

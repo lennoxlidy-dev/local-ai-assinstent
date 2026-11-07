@@ -74,6 +74,32 @@ def test_retries_then_gives_up_without_blocking_the_rest(ctx):
     assert "llama" in m.status.failed[0]
 
 
+def test_a_changed_server_file_is_not_retried(ctx):
+    from assistant.llm.download import ServerFileChanged
+
+    calls = []
+
+    def changed(progress, cancel):
+        calls.append(1)
+        raise ServerFileChanged("x.tar.bz2: the file on the server has changed (2 bytes instead of 1)")
+
+    ok = FakeWorld([("llm:a", 1000, 0)])
+    events = _collect(ctx)
+    m = SetupManager(ctx, plan=lambda: [Job("voice:stt", "Speech recognition", 500, changed), *ok.plan()])
+    m.RETRIES = (5.0, 5.0)                    # a retry would show up as a slow test
+    t0 = time.monotonic()
+    m.start()
+    m.join(5)
+    assert time.monotonic() - t0 < 2 and len(calls) == 1
+    assert ok.order == ["llm:a"]               # the rest still downloads
+    assert m.status.outdated == ["Speech recognition"]
+    assert events[-1].data["outdated"] == ["Speech recognition"]
+    text = describe(m.status)
+    assert text.startswith("Speech recognition: the file on the download server has changed")
+    assert "update the assistant" in text
+    assert "aktualisieren" in describe(m.status, "de")
+
+
 def test_plan_changes_are_picked_up(ctx):
     """Choosing another model in the wizard while the voice models download."""
     world = FakeWorld([("voice:kws", 1000, 0), ("llm:smart", 9000, 0)])
@@ -146,3 +172,30 @@ def test_describe():
     assert line.startswith("Downloading Parakeet · 50% · 2.0 MB/s") and "min left" in line
     assert describe(SetupStatus(finished=True)) == "All models are installed."
     assert "Lade" in describe(st, "de")
+
+
+def test_cli_setup_keeps_going_and_explains_a_changed_file(tmp_path, monkeypatch, capsys):
+    """install.bat runs --setup: one changed file must not stop the other downloads."""
+    import assistant.__main__ as entry
+    from assistant.core import hardware
+    from assistant.llm import setup as llm_setup
+    from assistant.llm.download import ServerFileChanged
+    from assistant.voice import models as voice_models
+
+    done = []
+    monkeypatch.setattr(hardware, "nvidia_gpus", lambda: [])
+    monkeypatch.setattr(llm_setup, "install_llama", lambda *a, **k: done.append("llama") or tmp_path / "srv.exe")
+    monkeypatch.setattr(llm_setup, "download_model", lambda spec, *a, **k: done.append(spec.id))
+
+    def ensure(vid, *a, **k):
+        if vid == "stt":
+            raise ServerFileChanged("parakeet.tar.bz2: the file on the server has changed (2 bytes instead of 1)")
+        done.append(vid)
+
+    monkeypatch.setattr(voice_models, "ensure", ensure)
+    code = entry.main(["--setup", "--models", "qwen3.5-4b", "--home", str(tmp_path / "home")])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert done == ["llama", "qwen3.5-4b", "kws", "vad", "tts", "speaker"]
+    assert "FAILED: parakeet.tar.bz2" in out and "Please update the assistant" in out
+    assert entry.main(["--setup", "--models", "nope", "--home", str(tmp_path / "home")]) == 2

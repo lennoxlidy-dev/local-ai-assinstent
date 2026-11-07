@@ -119,7 +119,7 @@ src/assistant/
                        send2trash IFileOperation, Everything SDK, SHGetKnownFolderPath)
     inputs.py          SendInput (fixed-width ctypes structs, unit-tested layout)
     com.py             per-thread COM init; WinRT worker thread (MTA + asyncio)
-tests/                 pytest (369 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
+tests/                 pytest (375 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
                        the real speech models - each skipped when not installed)
 bench/                 llm_bench.py + cases.py: GPU latency + tool-calling accuracy per model;
                        perf_bench.py: every performance target of the spec (idle, wake, STT, TTS, fast path, LLM)
@@ -461,6 +461,23 @@ Benchmark results here (4-core Xeon VM, CPU only, `bench/perf_bench.py`):
 | LLM reply starts < 2 s | needs the GPU: `scripts\perf-bench.bat --llm` | ? |
 | Speech recognition model load (only after idle unload) | 5.1 s, in parallel with your speech | |
 | Answer → first spoken audio | 462 ms | |
+
+Fixes after Milestone 7 (version 0.1.1):
+
+- **Speech recognition download failed every time**: the Parakeet archive on the k2-fsa/sherpa-onnx release was
+  re-exported upstream on 2026-11-07 (487,211,443 bytes instead of 487,170,055; new encoder/decoder/joiner files).
+  Every download then failed the pinned size/SHA-256 check *after* transferring 487 MB, four attempts per click.
+  The pin now points to the new archive (checked: same file layout, identical transcripts of the EN/DE/FR/ES
+  samples, all voice-pipeline tests pass). The other voice files are unchanged.
+- **Downloader**: the size from the first response (Content-Length, or Content-Range when resuming) is compared with
+  the pinned size, so a replaced file is noticed in under a second (`ServerFileChanged`). That error is not
+  retried; the status line, the tray and `--setup` say to update the assistant. Same-size checksum mismatches are
+  still retried (could be a broken transfer).
+- **Hugging Face downloads use commit URLs** (`resolve/<commit>/…`, `REVISIONS` in llm/models.py), so a re-upload on
+  a repository's main branch can't break the language models the same way. All pinned files were re-checked.
+- `--setup` (install.bat step 4) continues after a failed item and lists what is missing at the end, instead of
+  stopping at the first failure. Long download messages wrap in the wizard and settings.
+- pypdfium2 5.15.0 was yanked upstream ("important correction" in 5.15.1) → 5.15.1 (PDF extraction re-checked).
 
 ## How to test
 

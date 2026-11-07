@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 
 from ..core.cancel import CancelToken, Cancelled
 from ..core.context import AppContext
+from ..llm.download import ServerFileChanged
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ class SetupStatus:
     total_bytes: int = 0
     failed: list[str] = field(default_factory=list)
     completed: list[str] = field(default_factory=list)   # job ids
+    outdated: list[str] = field(default_factory=list)    # titles whose file changed on the server
     error: str = ""
 
     @property
@@ -132,6 +134,7 @@ class SetupManager:
         self._last_event = 0.0
         self._done_ids: set[str] = set()
         self._failed: dict[str, str] = {}
+        self._outdated: dict[str, str] = {}          # job id -> title
 
     # ------------------------------------------------------------------ control
     def missing(self) -> list[Job]:
@@ -157,6 +160,7 @@ class SetupManager:
                 self.cancel_token = CancelToken()
             self.status = SetupStatus(running=True, total_bytes=sum(j.size for j in jobs))
             self._failed.clear()
+            self._outdated.clear()
             self._thread = threading.Thread(target=self._run, name="setup-downloads", daemon=True)
             self._thread.start()
             return True
@@ -192,9 +196,10 @@ class SetupManager:
             st.finished = True
             st.current, st.rate = "", 0.0
             st.failed = [f"{jid}: {err}" for jid, err in self._failed.items()]
+            st.outdated = list(self._outdated.values())
             ok = not self._failed and not self.cancel_token.cancelled and not st.error
             log.info("setup downloads finished (%s)", "ok" if ok else st.error or "with errors")
-            bus.publish("setup.finished", ok=ok, failed=list(self._failed), error=st.error)
+            bus.publish("setup.finished", ok=ok, failed=list(self._failed), error=st.error, outdated=st.outdated)
 
     def _disk_ok(self, jobs: list[Job]) -> bool:
         need = int(sum(j.size for j in jobs) * 1.1) + 200 * 2**20
@@ -238,10 +243,16 @@ class SetupManager:
             if delay and self.cancel_token.wait(delay):
                 return
             job.attempts = attempt + 1
+            files.update(acc=0, last_done=0, last_total=0)
             try:
                 job.run(progress, self.cancel_token)
             except Cancelled:
                 return
+            except ServerFileChanged as e:  # the same other file would come again: don't retry
+                job.error = str(e)[:300]
+                self._outdated[job.id] = job.title
+                log.warning("download of %s failed: %s", job.title, e)
+                break
             except Exception as e:   # network trouble, checksum mismatch, server error ...
                 job.error = str(e)[:300]
                 log.warning("download of %s failed (attempt %d): %s", job.title, attempt + 1, e)
@@ -272,6 +283,12 @@ def describe(status: SetupStatus, lang: str = "en") -> str:
     if status.error:
         return status.error
     if status.finished and not status.running:
+        if status.outdated:
+            names = ", ".join(status.outdated)
+            return (f"{names}: Die Datei auf dem Download-Server wurde geändert und passt nicht zu dieser Version - "
+                    "bitte den Assistenten aktualisieren (neueste Version laden, install.bat ausführen)." if de else
+                    f"{names}: the file on the download server has changed and doesn't match this version - "
+                    "please update the assistant (download the latest version and run install.bat).")
         if status.failed:
             return ("Einige Downloads sind fehlgeschlagen - sie werden beim nächsten Start erneut versucht."
                     if de else "Some downloads failed - they'll be retried at the next start.")

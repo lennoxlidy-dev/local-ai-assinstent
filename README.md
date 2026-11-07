@@ -247,6 +247,11 @@ resume where they stopped and are checked with SHA-256. For a PC without interne
 `%LOCALAPPDATA%\Assistant\models` and `bin` from another PC. Setting the environment variable
 `ASSISTANT_NO_DOWNLOADS=1` stops all download attempts.
 
+**"The file on the download server has changed."** Every download is checked against the exact size and checksum
+this version expects. If a model's publisher replaces a file, the check fails and nothing is installed (on
+purpose: an unverified file is never used). Get the latest version of the assistant from GitHub (*Code →
+Download ZIP*), extract it and run `install.bat`; settings and the other models are kept.
+
 **The popup looks wrong** (black corners, no blur). Turn off *Settings → Appearance → Blurred (acrylic)
 background*.
 

@@ -21,6 +21,20 @@ from pathlib import Path
 from typing import Any
 
 
+#: The Hugging Face commit each repository is downloaded from. A commit URL never changes, so a
+#: re-upload on the repository's main branch (common for GGUF repos) can't break the pinned
+#: size/SHA-256 below. Checked Nov 2026.
+REVISIONS = {
+    "unsloth/Qwen3.5-9B-GGUF": "3885219b6810b007914f3a7950a8d1b469d598a5",
+    "unsloth/Qwen3.5-4B-GGUF": "e87f176479d0855a907a41277aca2f8ee7a09523",
+    "unsloth/Qwen3.5-9B-MTP-GGUF": "9716a636ee4bddc3fed678220b7a33dd2a4160ae",
+    "unsloth/gemma-4-E4B-it-GGUF": "bfc15c382204943c3a8fff0c750b94ae2364d7a3",
+    "ibm-granite/granite-4.2-8b-GGUF": "93f3f6a8938ee922b784cf4e5b4203cd3428df8f",
+    "mistralai/Ministral-3-8B-Instruct-2512-GGUF": "0102285ad796bd99af90f58de616092e5630e970",
+    "ggml-org/Qwen3.5-0.8B-GGUF": "807dfd9a6fadbf703207aac3bfb0b2b3040d077c",
+}
+
+
 @dataclass(frozen=True)
 class ModelFile:
     repo: str
@@ -30,7 +44,7 @@ class ModelFile:
 
     @property
     def url(self) -> str:
-        return f"https://huggingface.co/{self.repo}/resolve/main/{self.file}"
+        return f"https://huggingface.co/{self.repo}/resolve/{REVISIONS.get(self.repo, 'main')}/{self.file}"
 
     def local_name(self, model_id: str) -> str:
         # mmproj files share generic names across repos -> prefix with the model id

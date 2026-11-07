@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable
 
 from . import __version__
 
@@ -106,7 +107,7 @@ def run_setup(args: argparse.Namespace) -> int:
     from .core import hardware
     from .core.cancel import Cancelled
     from .core.context import bootstrap
-    from .llm.download import DownloadError
+    from .llm.download import DownloadError, ServerFileChanged
     from .llm.models import get_model
     from .llm.setup import download_model, install_llama
 
@@ -124,31 +125,51 @@ def run_setup(args: argparse.Namespace) -> int:
         sys.stdout.write(f"\r  {pct:5.1f}%  {done / 2**20:8.0f} / {total / 2**20:.0f} MB  {rate / 2**20:5.1f} MB/s ")
         sys.stdout.flush()
 
-    try:
-        gpu = hardware.nvidia_gpus()
-        driver = gpu[0].driver if gpu else None
-        print(f"GPU: {gpu[0].name} (driver {driver})" if gpu else "No NVIDIA GPU found: using the Vulkan/CPU build")
-        print("Installing llama.cpp ...")
-        exe = install_llama(ctx.paths.bin_dir, ctx.paths.cache_dir, driver=driver, progress=bar)
-        print(f"\n  {exe}")
-        for mid in ids:
-            spec = get_model(mid)
-            print(f"Downloading {spec.title} ({spec.download_bytes / 2**30:.1f} GB) ...")
-            download_model(spec, ctx.paths.models_dir, vision=c.vision, progress=bar)
-            print()
-        from .voice.models import CORE_VOICE, VOICE_MODELS, ensure
+    from .voice.models import CORE_VOICE, VOICE_MODELS, ensure
 
-        for vid in (*CORE_VOICE, "speaker"):
-            vm = VOICE_MODELS[vid]
-            print(f"Downloading {vm.title} ({vm.size / 2**20:.0f} MB) ...")
-            ensure(vid, ctx.paths.models_dir, ctx.paths.cache_dir, progress=bar)
-            print()
-    except (DownloadError, OSError, RuntimeError, KeyError) as e:
-        print(f"\nSetup failed: {e}")
-        return 1
+    gpu = hardware.nvidia_gpus()
+    driver = gpu[0].driver if gpu else None
+    print(f"GPU: {gpu[0].name} (driver {driver})" if gpu else "No NVIDIA GPU found: using the Vulkan/CPU build")
+
+    def llama() -> None:
+        print(f"\n  {install_llama(ctx.paths.bin_dir, ctx.paths.cache_dir, driver=driver, progress=bar)}")
+
+    try:
+        specs = [get_model(mid) for mid in ids]
+    except KeyError as e:
+        print(f"Unknown model: {e}")
+        return 2
+    steps: list[tuple[str, Callable[[], object]]] = [("llama.cpp", llama)]
+    for spec in specs:
+        steps.append((f"{spec.title} ({spec.download_bytes / 2**30:.1f} GB)",
+                      lambda spec=spec: download_model(spec, ctx.paths.models_dir, vision=c.vision, progress=bar)))
+    for vid in (*CORE_VOICE, "speaker"):
+        vm = VOICE_MODELS[vid]
+        steps.append((f"{vm.title} ({vm.size / 2**20:.0f} MB)",
+                      lambda vid=vid: ensure(vid, ctx.paths.models_dir, ctx.paths.cache_dir, progress=bar)))
+    failed: list[str] = []
+    changed = False
+    try:
+        for title, step in steps:           # one failed download doesn't stop the others
+            print(f"Downloading {title} ...")
+            try:
+                step()
+                print()
+            except (DownloadError, OSError, RuntimeError, KeyError) as e:
+                print(f"\n  FAILED: {e}")
+                failed.append(title)
+                changed = changed or isinstance(e, ServerFileChanged)
     except (KeyboardInterrupt, Cancelled):
         print("\nCancelled - run it again to resume the downloads.")
         return 130
+    if failed:
+        print(f"\nNot downloaded: {', '.join(failed)}")
+        if changed:
+            print("A file on the download server has changed since this version of the assistant was made, so it "
+                  "can't be verified.\nPlease update the assistant (download the latest version and run install.bat).")
+        else:
+            print("Run this again to retry; finished files are kept and interrupted ones resume.")
+        return 1
     print("Done. Start the assistant with scripts\\run-tray.bat or try scripts\\run-cli.bat")
     return 0
 

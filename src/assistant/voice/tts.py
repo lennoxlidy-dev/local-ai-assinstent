@@ -49,6 +49,25 @@ def speakable(text: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
+TARGET_PEAK = 0.89          # -1 dBFS
+MAX_GAIN = 6.0              # never lift near-silence into hiss
+
+
+def loudness(x: np.ndarray, volume: float = 1.0) -> np.ndarray:
+    """Even out a synthesized sentence: peaks to -1 dBFS (the raw voice is ~-26 dBFS, music ~-12), times ``volume``
+    (Settings → Voice volume, up to 2x); a soft limiter keeps everything above 0.8 below 0.98 instead of clipping."""
+    x = np.asarray(x, dtype=np.float32)
+    peak = float(np.abs(x).max()) if x.size else 0.0
+    if peak < 1e-4:
+        return x
+    y = x * (min(TARGET_PEAK / peak, MAX_GAIN) * max(0.0, volume))
+    over = np.abs(y) > 0.8
+    if over.any():
+        a = np.abs(y[over])
+        y[over] = np.sign(y[over]) * (0.8 + 0.18 * np.tanh((a - 0.8) / 0.18))
+    return y.astype(np.float32)
+
+
 class SentenceStream:
     """Feed LLM text deltas; ``on_sentence`` is called with each complete sentence."""
 
@@ -104,6 +123,7 @@ class Speaker:
         self._idle = threading.Event()
         self._idle.set()
         self.speaking_text = ""
+        self.volume = 1.0                  # Settings → Voice volume (1.0 = 100 %)
         self.first_audio_at: float | None = None
         threading.Thread(target=self._worker, name="tts", daemon=True).start()
 
@@ -157,6 +177,10 @@ class Speaker:
             self.player.wait(0.05)
         return True
 
+    def is_active(self) -> bool:
+        """Talking or about to (a sentence is being synthesized): routine sounds duck meanwhile."""
+        return not self._idle.is_set() or bool(self.player.busy)
+
     def unload(self) -> None:
         with self._lock:
             self._tts = None
@@ -206,7 +230,7 @@ class Speaker:
                     self.speaking_text = text
                     if self.first_audio_at is None:
                         self.first_audio_at = time.perf_counter()
-                    self.player.play(samples, sr)
+                    self.player.play(loudness(samples, self.volume), sr)
             except OSError as e:          # no audio output device (or it disappeared)
                 if not self._warned:
                     self._warned = True

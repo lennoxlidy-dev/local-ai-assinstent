@@ -98,6 +98,10 @@ class VoiceConfig:
     tts_voice_de: str = opt("F1", choices=("F1", "F2", "F3", "F4", "F5", "M1", "M2", "M3", "M4", "M5"),
                             doc="Supertonic voice for German.")
     tts_speed: float = opt(1.0, min=0.5, max=2.0)
+    tts_volume: int = opt(100, min=50, max=200,
+                          doc="Loudness of the voice in percent: 100 = every sentence evened out to near full level.")
+    duck_percent: int = opt(25, min=0, max=100,
+                            doc="Routine sounds play this loud (percent) while the assistant is talking.")
     chime: bool = opt(True, doc="Play a short sound when the wake word is heard.")
     input_device: str = opt("", doc="Microphone name; empty = Windows default.")
     output_device: str = opt("", doc="Speaker name; empty = Windows default.")

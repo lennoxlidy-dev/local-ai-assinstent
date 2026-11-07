@@ -163,7 +163,9 @@ def test_other_formats_and_broken_files_go_to_the_fallback(out, tmp_path):
         def __init__(self):
             self.calls, self.stopped = [], 0
 
-        def play(self, path, wait, cancelled=None, *, until=None, min_s=0.0):
+        def play(self, path, wait, cancelled=None, *, until=None, min_s=0.0, volume=1.0, speaking=None,
+                 duck_level=None):
+            assert callable(speaking) and callable(duck_level)          # ducking reaches the MCI player too
             self.calls.append((path, wait, min_s))
 
         def stop_all(self):
@@ -244,3 +246,106 @@ def test_play_track_stop_and_empty_files():
     assert _run(10.0, stop_after=0.5)[0] < 0.6
     assert _run(0.0, min_s=5.0)[0] == 0.0                   # an empty file isn't repeated forever
     assert BLOCK == 2048
+
+
+# ---------------------------------------------------------------------- the voice stays audible: ducking + volume
+def test_ducker_lowers_smoothly_while_talking_and_comes_back():
+    from assistant.audio.sound import Ducker
+
+    talking = [False]
+    d = Ducker(lambda: talking[0], lambda: 0.25, RATE)
+    one = np.ones((BLOCK, 1), np.float32)
+    assert np.array_equal(d(one), one)                           # nobody talks: untouched
+    talking[0] = True
+    gains = np.concatenate([d(one)[:, 0] for _ in range(10)])    # 10 blocks = 0.46 s
+    assert gains[0] == pytest.approx(1.0) and gains[-1] == pytest.approx(0.25)
+    assert np.flatnonzero(gains <= 0.2501)[0] / RATE < 0.16      # down within 0.15 s
+    assert np.abs(np.diff(gains)).max() < 0.001                  # a ramp, no click
+    talking[0] = False
+    up = np.concatenate([d(one)[:, 0] for _ in range(20)])
+    assert up[-1] == pytest.approx(1.0) and np.flatnonzero(up >= 0.9999)[0] / RATE < 0.62
+    assert np.abs(np.diff(up)).max() < 0.001
+    half = Ducker(lambda: False, lambda: 0.25, RATE, volume=0.5)
+    assert np.allclose(half(one), 0.5)                           # a quieter sound (the step's volume)
+
+
+def test_a_sound_ducks_under_the_voice(out, tmp_path):
+    eng = SoundEngine()
+    talking = [False]
+    eng.speaking = lambda: talking[0]
+    eng.duck_level = lambda: 0.25
+    orig = FakeStream.write
+
+    def write(self, block):                                     # the voice talks from 1.0 s to 2.0 s of the sound
+        t = sum(len(b) for b in self.blocks) / RATE
+        talking[0] = 1.0 <= t < 2.0
+        orig(self, block)
+
+    FakeStream.write = write
+    try:
+        eng.play(mp3(tmp_path, "tone_44k_stereo_1s.mp3"), wait=True, min_s=3.0, volume=0.8)
+    finally:
+        FakeStream.write = orig
+    a = out.instances[0].audio[:, 0]
+
+    def rms(t0, t1):
+        return float(np.sqrt(np.mean(a[int(t0 * RATE):int(t1 * RATE)] ** 2)))
+
+    before, during, after = rms(0.3, 0.9), rms(1.4, 1.9), rms(2.9, 3.0)
+    assert during == pytest.approx(before * 0.25, rel=0.15)      # ducked to 25 % while talking
+    assert after == pytest.approx(before, rel=0.1)               # and back up afterwards
+    ref = SoundEngine()
+    ref.play(mp3(tmp_path, "tone_44k_stereo_1s.mp3"), wait=True)
+    full = out.instances[-1].audio[:, 0]
+    assert before == pytest.approx(float(np.sqrt(np.mean(full[int(0.3 * RATE):int(0.9 * RATE)] ** 2))) * 0.8, rel=0.05)
+
+
+def test_the_mci_player_ducks_too():
+    from assistant.audio.mci import play_session
+
+    class Clock:
+        t = 0.0
+
+        def __call__(self):
+            return self.t
+
+    clock = Clock()
+
+    class Ticks:
+        def wait(self, dt):
+            clock.t = round(clock.t + dt, 3)
+            return False
+
+    volumes, started = [], [0.0]
+
+    def mci(cmd):
+        if cmd.startswith("play "):
+            started[0] = clock.t
+        elif cmd.startswith("status "):
+            return "playing" if clock.t - started[0] < 4.0 else "stopped"
+        elif cmd.startswith("setaudio "):
+            volumes.append((round(clock.t, 1), int(cmd.rsplit(" ", 1)[1])))
+        return ""
+
+    play_session(mci, "a", "x.wma", stop=Ticks(), clock=clock, volume=0.8,
+                 speaking=lambda: 1.0 <= clock.t < 2.0, duck_level=lambda: 0.25)
+    assert volumes[0] == (0.0, 800)                              # the step's volume from the start
+    assert (1.0, 200) in volumes and (2.0, 800) in volumes       # ducked while talking, back afterwards
+
+
+# ---------------------------------------------------------------------- the voice itself: evened out, louder
+def test_voice_sentences_are_evened_out_to_near_full_level():
+    from assistant.voice.tts import loudness
+
+    t = np.arange(RATE) / RATE
+    quiet = (0.34 * np.sin(2 * np.pi * 180 * t) * np.sin(2 * np.pi * 3 * t) ** 2).astype(np.float32)  # like raw TTS
+    y = loudness(quiet)
+    assert float(np.abs(y).max()) == pytest.approx(0.89, abs=0.01)
+    gain_db = 20 * np.log10(np.sqrt(np.mean(y ** 2)) / np.sqrt(np.mean(quiet ** 2)))
+    assert 8 < gain_db < 9                                       # +8.4 dB for this one
+    louder = loudness(quiet, 2.0)
+    assert float(np.abs(louder).max()) < 0.98 and np.sqrt(np.mean(louder ** 2)) > np.sqrt(np.mean(y ** 2)) * 1.3
+    assert np.all(np.isfinite(louder))
+    assert np.array_equal(loudness(np.zeros(100, np.float32)), np.zeros(100, np.float32))   # silence stays silence
+    hiss = (np.random.default_rng(0).standard_normal(1000) * 0.001).astype(np.float32)
+    assert float(np.abs(loudness(hiss)).max()) <= float(np.abs(hiss).max()) * 6.01          # gain capped

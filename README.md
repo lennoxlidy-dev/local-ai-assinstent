@@ -136,7 +136,7 @@ without the language model. Create routines in the setup wizard, from a template
 | Step | What it does |
 |---|---|
 | **Say something** | speaks a sentence the moment the routine reaches it, e.g. "Gaming mode activated. All systems online." |
-| **Play a sound** | plays an MP3, WAV, FLAC or OGG file (WMA/M4A through Windows' own player), no player window. Click **Choose sound…**, then choose how it ends: **Plays once**; **Plays once, then the next step**; or **Keeps playing until the routine is done** (repeats if it's shorter, fades out when the last step is done). **at least … s** makes it play at least that long (a short sound repeats) |
+| **Play a sound** | plays an MP3, WAV, FLAC or OGG file (WMA/M4A through Windows' own player), no player window. Click **Choose sound…**, then choose how it ends: **Plays once**; **Plays once, then the next step**; or **Keeps playing until the routine is done** (repeats if it's shorter, fades out when the last step is done). **at least … s** makes it play at least that long (a short sound repeats); **volume** in % |
 | **Check / update drivers** | **Only check** says which driver updates Windows Update has; **Install** asks first and shows the Windows administrator prompt (see [Driver updates](#driver-updates)) |
 | **Open an app** | e.g. Steam, Discord, your game launcher (`{"name": "Steam"}`) |
 | **Volume**, **Media**, **Play music**, **Virtual desktop**, **Wait**, … | everything the assistant can do, with the same permission checks |
@@ -152,6 +152,9 @@ Example: a gaming routine that sounds like a movie AI:
 
 A maintenance routine could be: **Say something** "Checking your drivers", then **Check / update drivers → Only
 check**. It says the result, e.g. "2 driver updates available: …".
+
+While the assistant talks, a routine's sound is turned down automatically, to 25 % by default (*Settings → Voice →
+Sounds while I'm talking*), so you can hear it over the music. *Voice volume* there makes the voice itself louder.
 
 "Jarvis, stop" or the panic hotkey also stops a routine's sound. The voice of the spoken lines is chosen in
 *Settings → Voice* (10 voices: F1–F5, M1–M5).
@@ -273,6 +276,9 @@ common name. Every trigger is double-checked against the transcript, so most nea
 avoid background music. For unusual names or words, typing in the popup chat is more reliable.
 
 **No sound, or the wrong speaker.** In *Settings → Voice*, choose the output device and play the test sound.
+
+**The voice is too quiet** (or drowned out by music). Raise *Settings → Voice → Voice volume* (up to 200 %, softly
+limited so it doesn't distort). Lower *Sounds while I'm talking* to make a routine's sound duck further.
 
 **"The language model isn't available" / only simple commands work.** The model or llama.cpp is still
 downloading or is missing. Use *Settings → AI model → Download missing models*, or run

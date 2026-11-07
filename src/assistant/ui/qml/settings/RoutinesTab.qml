@@ -34,13 +34,15 @@ Item {
     }
     function setTool(i, t) { var a = steps.slice(); a[i] = {tool: t, args: defaultArgs(t)}; steps = a; dirty = true }
     // a sound step's args from its parts: how it ends ("once" | "wait" | "until") and the minimum seconds
-    function soundArgs(path, end, minS) {
+    function soundArgs(path, end, minS, vol) {
         var o = {path: path || ""}
         if (end === "wait") o.wait = true
         if (end === "until") o.until_done = true
         if (minS > 0) o.min_seconds = Math.round(minS)
+        if (vol !== undefined && vol < 100) o.volume = Math.max(5, Math.round(vol))
         return JSON.stringify(o)
     }
+    function soundVol(a) { return a.volume || 100 }
     function soundEnd(a) { return a.until_done === true ? "until" : (a.wait === true ? "wait" : "once") }
     function move(i, d) { var a = steps.slice(); var j = i + d; if (j < 0 || j >= a.length) return; var t = a[i]; a[i] = a[j]; a[j] = t; steps = a; dirty = true }
     function removeStep(i) { var a = steps.slice(); a.splice(i, 1); steps = a; dirty = true }
@@ -154,8 +156,8 @@ Item {
                                     readonly property var a: tab.argsOf(modelData)
                                     RowLayout { Layout.fillWidth: true; spacing: 10
                                         Btn { small: true; text: "♪ " + tab.tr.choose_sound
-                                              onClicked: { var r = settings.call("pickSound", {}); var a = parent.parent.a
-                                                           if (r && r.path) tab.put(index, "args", tab.soundArgs(r.path, tab.soundEnd(a), a.min_seconds || 0)) } }
+                                              onClicked: { var r = settings.call("pickSound", {}); var a = tab.argsOf(tab.steps[index])
+                                                           if (r && r.path) tab.put(index, "args", tab.soundArgs(r.path, tab.soundEnd(a), a.min_seconds || 0, tab.soundVol(a))) } }
                                         Text { Layout.fillWidth: true; text: parent.parent.a.path ? parent.parent.a.path.split(/[\\/]/).pop() : tab.tr.no_sound
                                                color: parent.parent.a.path ? tab.th.fg : tab.th.dim; elide: Text.ElideMiddle; font.pixelSize: 12 }
                                     }
@@ -164,13 +166,18 @@ Item {
                                                    options: [{value: "once", label: tab.tr.sound_once}, {value: "wait", label: tab.tr.sound_wait},
                                                              {value: "until", label: tab.tr.sound_until}]
                                                    value: tab.soundEnd(parent.parent.a)
-                                                   onChosen: function(v) { var a = parent.parent.a
-                                                                           tab.put(index, "args", tab.soundArgs(a.path, v, a.min_seconds || 0)) } }
+                                                   onChosen: function(v) { var a = tab.argsOf(tab.steps[index])
+                                                                           tab.put(index, "args", tab.soundArgs(a.path, v, a.min_seconds || 0, tab.soundVol(a))) } }
                                         Text { text: tab.tr.min_play; color: tab.th.dim; font.pixelSize: 12 }
                                         InputField { objectName: "soundMin"; implicitWidth: 64; value: String(parent.parent.a.min_seconds || 0)
-                                                     onTextEdited: { var n = parseFloat(text.replace(",", ".")); var a = parent.parent.a
-                                                                     if (!isNaN(n) && n >= 0) tab.edit(index, tab.soundArgs(a.path, tab.soundEnd(a), n)) } }
+                                                     onTextEdited: { var n = parseFloat(text.replace(",", ".")); var a = tab.argsOf(tab.steps[index])
+                                                                     if (!isNaN(n) && n >= 0) tab.edit(index, tab.soundArgs(a.path, tab.soundEnd(a), n, tab.soundVol(a))) } }
                                         Text { text: tab.tr.seconds_short; color: tab.th.dim; font.pixelSize: 12 }
+                                        Text { text: tab.tr.volume_short; color: tab.th.dim; font.pixelSize: 12; Layout.leftMargin: 6 }
+                                        InputField { objectName: "soundVolume"; implicitWidth: 64; value: String(tab.soundVol(parent.parent.a))
+                                                     onTextEdited: { var n = parseFloat(text.replace(",", ".")); var a = tab.argsOf(tab.steps[index])
+                                                                     if (!isNaN(n) && n >= 5 && n <= 100) tab.edit(index, tab.soundArgs(a.path, tab.soundEnd(a), a.min_seconds || 0, n)) } }
+                                        Text { text: "%"; color: tab.th.dim; font.pixelSize: 12 }
                                     }
                                 }
                                 // Check / update drivers

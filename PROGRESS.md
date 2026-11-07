@@ -119,7 +119,7 @@ src/assistant/
                        send2trash IFileOperation, Everything SDK, SHGetKnownFolderPath)
     inputs.py          SendInput (fixed-width ctypes structs, unit-tested layout)
     com.py             per-thread COM init; WinRT worker thread (MTA + asyncio)
-tests/                 pytest (441 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
+tests/                 pytest (447 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
                        the real speech models - each skipped when not installed)
 bench/                 llm_bench.py + cases.py: GPU latency + tool-calling accuracy per model;
                        perf_bench.py: every performance target of the spec (idle, wake, STT, TTS, fast path, LLM)
@@ -577,6 +577,20 @@ Version 0.1.7 (feedback: "make sure .mp3 files work too"):
   loudness every 0.1 s). Tests use small LAME-encoded MP3s in tests/data (incl. a VBR file that breaks with split
   reads); libsndfile-written MP3s can't be used - it reads them back wrongly.
 - The .exe build includes libsndfile (PyInstaller's soundfile hook); its self-test passes.
+
+Version 0.1.8 (feedback: "make the assistant louder so you can hear it talking when you play a sound"):
+
+- Measured: the raw Supertonic voice is ~-26 dBFS RMS with peaks 0.34-0.68 - 12-17 dB quieter than typical music.
+- **Every spoken sentence is evened out** (`voice.tts.loudness`): peaks to -1 dBFS (gain capped at 6x), times
+  `voice.tts_volume` (50-200 %, Settings → Voice → Voice volume); a soft limiter above 0.8 keeps it under 0.98 instead
+  of clipping. Real sentences: +5 to +9 dB at 100 %, +9 to +12 dB at 150 %.
+- **Ducking**: routine sounds go down to `voice.duck_percent` (default 25 %) while the assistant talks or is about to
+  (`Speaker.is_active`: a sentence is being synthesized or playing) - down in 0.15 s, up in 0.6 s, ramped per sample
+  (`audio.sound.Ducker`); the MCI fallback steps its volume the same way. Together: the voice is ~17-24 dB further
+  above the music than before.
+- **Sound step volume** (5-100 %) in the routine editor; the fade-out starts from the current level.
+- Tests: ducking ramp (no clicks), ducking under the voice with an MP3, MCI ducking, loudness math, and the real voice
+  model (levelled to -1 dBFS peaks; 160 % louder but never clipped); editor volume field; voice sliders.
 
 ## How to test
 

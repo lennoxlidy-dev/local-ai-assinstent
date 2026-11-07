@@ -71,22 +71,50 @@ def play_track(read: Callable[[int], np.ndarray], rewind: Callable[[], None], wr
     return played / rate
 
 
+class Ducker:
+    """Gain for a routine sound: ``volume``, lowered smoothly to ``level()`` while ``speaking()`` - the assistant's
+    voice stays clear over music. Down in 0.15 s, back up in 0.6 s, ramped per sample (no clicks)."""
+
+    DOWN_S, UP_S = 0.15, 0.6
+
+    def __init__(self, speaking: Callable[[], bool], level: Callable[[], float], rate: int, volume: float = 1.0):
+        self.speaking, self.level, self.rate, self.volume = speaking, level, rate, volume
+        self.g = 1.0
+
+    def __call__(self, block: np.ndarray) -> np.ndarray:
+        target = min(1.0, max(0.0, self.level())) if self.speaking() else 1.0
+        if self.g == target:
+            return block if self.g * self.volume == 1.0 else block * np.float32(self.g * self.volume)
+        n = len(block)
+        step = n / (self.rate * (self.DOWN_S if target < self.g else self.UP_S))
+        new = max(target, self.g - step) if target < self.g else min(target, self.g + step)
+        ramp = (np.linspace(self.g, new, n, endpoint=False) * self.volume).astype(np.float32)
+        self.g = new
+        return block * (ramp[:, None] if block.ndim == 2 else ramp)
+
+
 class SoundEngine:
-    """The ``platform.sound`` backend: decodes and plays itself; other formats go to ``fallback``."""
+    """The ``platform.sound`` backend: decodes and plays itself; other formats go to ``fallback``.
+
+    The app fills in ``device`` (the voice's output device), ``speaking`` (is the assistant talking?) and
+    ``duck_level`` (how loud sounds stay meanwhile, Settings → Voice)."""
 
     def __init__(self, fallback: Any = None, device: Callable[[], str] = lambda: ""):
         self.fallback = fallback
         self.device = device                     # the voice output device (Settings → Voice)
+        self.speaking: Callable[[], bool] = lambda: False
+        self.duck_level: Callable[[], float] = lambda: 0.25
         self._lock = threading.Lock()
         self._stops: set[threading.Event] = set()
 
     def play(self, path: str, wait: bool, cancelled: Callable[[], bool] | None = None, *,
-             until: Callable[[], bool] | None = None, min_s: float = 0.0) -> None:
+             until: Callable[[], bool] | None = None, min_s: float = 0.0, volume: float = 1.0) -> None:
         name = Path(path).name
+        fallback = self._fallback_kw(until, min_s, volume)
         if Path(path).suffix.lower() not in DECODED_EXT:
             if self.fallback is None:
                 raise ToolError(f"Can't play {name}: use an MP3, WAV, FLAC or OGG file.")
-            self.fallback.play(path, wait, cancelled, until=until, min_s=min_s)
+            self.fallback.play(path, wait, cancelled, **fallback)
             return
         import soundfile as sf
 
@@ -95,7 +123,7 @@ class SoundEngine:
         except Exception as e:
             if self.fallback is not None:        # e.g. an MP3 variant libsndfile can't read: let Windows try
                 log.info("soundfile can't read %s (%s); using the fallback player", name, e)
-                self.fallback.play(path, wait, cancelled, until=until, min_s=min_s)
+                self.fallback.play(path, wait, cancelled, **fallback)
                 return
             raise ToolError(f"Can't play {name}: {e}") from None
         stop, done, errors = threading.Event(), threading.Event(), []
@@ -105,7 +133,7 @@ class SoundEngine:
         def run() -> None:
             try:
                 with f:
-                    self._play_file(f, stop, cancelled, until, min_s)
+                    self._play_file(f, stop, cancelled, until, min_s, volume)
             except Exception as e:
                 log.warning("sound %s failed: %s", name, e)
                 errors.append(e)
@@ -119,8 +147,12 @@ class SoundEngine:
         if errors:
             raise ToolError(f"Can't play {name}: {errors[0]}")
 
+    def _fallback_kw(self, until: Callable[[], bool] | None, min_s: float, volume: float) -> dict[str, Any]:
+        return {"until": until, "min_s": min_s, "volume": volume, "speaking": lambda: self.speaking(),
+                "duck_level": lambda: self.duck_level()}
+
     def _play_file(self, f: Any, stop: threading.Event, cancelled: Callable[[], bool] | None,
-                   until: Callable[[], bool] | None, min_s: float) -> None:
+                   until: Callable[[], bool] | None, min_s: float, volume: float = 1.0) -> None:
         import sounddevice as sd
 
         from .sources import resolve_device
@@ -146,12 +178,14 @@ class SoundEngine:
             nonlocal pos
             pos = 0
 
+        # (looked up on every block: the voice may start - and set ``speaking`` - while a sound plays)
+        duck = Ducker(lambda: self.speaking(), lambda: self.duck_level(), OUT_RATE, volume)
         stream = sd.OutputStream(samplerate=OUT_RATE, channels=channels, dtype="float32",
                                  device=resolve_device(self.device(), "output"), blocksize=BLOCK)
         stream.start()
         try:
-            play_track(read, rewind, stream.write, OUT_RATE, stop=stop, cancelled=cancelled, until=until,
-                       min_s=min_s)
+            play_track(read, rewind, lambda block: stream.write(duck(block)), OUT_RATE, stop=stop,
+                       cancelled=cancelled, until=until, min_s=min_s)
         finally:
             if stop.is_set() or (cancelled is not None and cancelled()):
                 stream.abort()                   # "stop": silence now
@@ -170,4 +204,4 @@ class SoundEngine:
                 pass
 
 
-__all__ = ["DECODED_EXT", "SoundEngine", "play_track"]
+__all__ = ["DECODED_EXT", "Ducker", "SoundEngine", "play_track"]

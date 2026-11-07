@@ -316,3 +316,36 @@ def test_setup_voice_enrolls_the_voice_lock(voice):
     profile = ctx.paths.config_dir / "voiceprint.npy"
     assert ("enrolled", {}) in events and profile.exists()
     profile.unlink()
+
+
+def test_the_voice_is_evened_out_and_follows_the_volume_setting(tmp_path):
+    """Real speech output: every sentence reaches ~-1 dBFS peaks (the raw voice is ~-26 dBFS RMS, far quieter than
+    music), and Settings → Voice volume makes it louder still - softly limited, never clipped."""
+    from assistant.core.cancel import CancelToken
+    from assistant.core.context import bootstrap
+    from assistant.voice.runtime import build_voice
+
+    home = tmp_path / "home"
+    (home / "models").mkdir(parents=True)
+    _link(MODELS, home / "models" / "voice")
+    ctx = bootstrap("cli", home=str(home), detect_hardware="off")
+    player = NullPlayer()
+    stack = build_voice(ctx, None, player=player, headless=True)
+    sp = stack.speaker
+    assert sp.volume == 1.0
+
+    def speak(text):
+        player.played.clear()
+        sp.say(text, "en", "M1", 1.0, CancelToken())
+        assert sp.wait(timeout=60)
+        return np.concatenate(player.played)
+
+    raw, sr = sp.synthesize("Gaming mode activated. All systems online.", "en", "M1")
+    normal = speak("Gaming mode activated. All systems online.")
+    assert float(np.abs(normal).max()) == pytest.approx(0.89, abs=0.02)
+    rms = lambda x: float(np.sqrt(np.mean(x ** 2)))  # noqa: E731
+    assert 20 * np.log10(rms(normal) / rms(raw)) > 2              # clearly louder than the raw voice
+    ctx.config.set("voice.tts_volume", 160)                        # Settings → Voice volume 160 %
+    assert sp.volume == 1.6
+    loud = speak("Gaming mode activated. All systems online.")
+    assert rms(loud) > rms(normal) * 1.25 and float(np.abs(loud).max()) < 0.98

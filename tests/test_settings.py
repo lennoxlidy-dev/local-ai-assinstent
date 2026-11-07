@@ -351,10 +351,19 @@ def test_routine_editor_sound_and_announcement_steps(sw, tmp_path):
         QGuiApplication.sendEvent(w.window, QKeyEvent(kind, Qt.Key.Key_8, Qt.KeyboardModifier.NoModifier, "8"))
     _pump(3)
     assert shiboken6.isValid(minimum) and minimum.property("text") == "08"
+    vol = next(i for i in visual(tab) if i.objectName() == "soundVolume" and i.isVisible())    # volume 60 %
+    vol.forceActiveFocus()
+    for key, mod, ch in ((Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier, ""),
+                         (Qt.Key.Key_6, Qt.KeyboardModifier.NoModifier, "6"), (Qt.Key.Key_0, Qt.KeyboardModifier.NoModifier, "0")):
+        for kind in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+            QGuiApplication.sendEvent(w.window, QKeyEvent(kind, key, mod, ch))
+        _pump(2)
+    assert shiboken6.isValid(vol) and vol.property("text") == "60"
     QMetaObject.invokeMethod(tab, "save")
     steps = system.services["routines"].get("Gaming mode").steps
     assert steps[0] == {"tool": "say", "args": {"text": "Gaming mode on!!"}}
-    assert steps[1] == {"tool": "play_sound", "args": {"path": str(intro), "until_done": True, "min_seconds": 8}}
+    assert steps[1] == {"tool": "play_sound", "args": {"path": str(intro), "until_done": True, "min_seconds": 8,
+                                                       "volume": 60}}
 
     spoken = []
 
@@ -373,5 +382,27 @@ def test_routine_editor_sound_and_announcement_steps(sw, tmp_path):
         time.sleep(0.02)
     assert spoken == ["Gaming mode on!!"] and system.registry.platform.sound.played == [(str(intro), False)]
     assert system.registry.platform.sound.options[0]["min_s"] == 8.0
+    assert system.registry.platform.sound.options[0]["volume"] == 0.6
     w.window.close()                      # like the X button (frees the QML before the fixture ends)
     _pump()
+
+
+def test_voice_volume_and_ducking_settings(sw):
+    from PySide6.QtCore import QCoreApplication
+    from PySide6.QtQuick import QQuickItem
+
+    w, system, _ = sw
+    cfg = system.ctx.config
+    assert cfg.data.voice.tts_volume == 100 and cfg.data.voice.duck_percent == 25
+    assert call(w, "set", key="voice.tts_volume", value=150.0)["ok"] and cfg.data.voice.tts_volume == 150
+    assert call(w, "set", key="voice.duck_percent", value=10.0)["ok"] and cfg.data.voice.duck_percent == 10
+    assert not call(w, "set", key="voice.tts_volume", value=500.0)["ok"]          # 50-200 %
+    assert w.show()
+    call(w, "tab", name="voice")
+    for _ in range(10):
+        QCoreApplication.processEvents()
+    names = {i.objectName() for i in w.window.findChildren(QQuickItem) if i.objectName()}
+    assert {"ttsVolume", "duckPercent"} <= names
+    w.window.close()
+    for _ in range(5):
+        QCoreApplication.processEvents()

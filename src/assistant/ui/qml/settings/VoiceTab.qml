@@ -137,6 +137,18 @@ ScrollView {
                               onCommitted: function(x) { tab.set("voice.tts_speed", x) } }
             }
             SettingRow {
+                label: tab.tr.tts_volume; hint: tab.tr.tts_volume_hint
+                ValueSlider { objectName: "ttsVolume"; from: 50; to: 200; step: 5; decimals: 0; unit: "%"
+                              value: tab.c["voice.tts_volume"] || 100
+                              onCommitted: function(x) { tab.set("voice.tts_volume", Math.round(x)) } }
+            }
+            SettingRow {
+                label: tab.tr.duck; hint: tab.tr.duck_hint
+                ValueSlider { objectName: "duckPercent"; from: 0; to: 100; step: 5; decimals: 0; unit: "%"
+                              value: tab.c["voice.duck_percent"] !== undefined ? tab.c["voice.duck_percent"] : 25
+                              onCommitted: function(x) { tab.set("voice.duck_percent", Math.round(x)) } }
+            }
+            SettingRow {
                 label: tab.tr.chime; separator: false
                 ToggleSwitch { checked: tab.c["voice.chime"] === true; onToggled: function(on) { tab.set("voice.chime", on) } }
             }

@@ -55,6 +55,7 @@ def build_voice(ctx: AppContext, assistant: Any, *, source_factory: Callable[[],
     if player is None:
         player = NullPlayer() if headless else Player(v.output_device)
     speaker = Speaker(model_path(ctx, "tts"), player, keep_loaded_min=v.stt_keep_loaded_min)
+    speaker.volume = v.tts_volume / 100
     lock = VoiceLock(model_path(ctx, "speaker"), ctx.paths.config_dir / "voiceprint.npy",
                      threshold=v.voice_lock_threshold)
     if v.voice_lock and not installed("speaker", ctx.paths.models_dir):
@@ -74,6 +75,8 @@ def build_voice(ctx: AppContext, assistant: Any, *, source_factory: Callable[[],
         v = ctx.config.data.voice
         if "voice.voice_lock_threshold" in keys:
             lock.threshold = v.voice_lock_threshold
+        if "voice.tts_volume" in keys:
+            speaker.volume = v.tts_volume / 100
         if "voice.stt_keep_loaded_min" in keys:
             stt.keep_loaded_s = speaker.keep_loaded_s = v.stt_keep_loaded_min * 60
         if "voice.output_device" in keys and hasattr(player, "device"):

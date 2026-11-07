@@ -348,6 +348,10 @@ class TrayApp(QObject):
                 return
             self.voice = stack
             self.tray.beep_alarms = False       # the voice stack plays a proper alarm sound
+            from ..audio.sound import SoundEngine
+
+            if self.tools is not None and isinstance(self.tools.platform.sound, SoundEngine):
+                self.tools.platform.sound.speaking = stack.speaker.is_active   # routine sounds duck meanwhile
             if self.confirmer is not None:
                 self.confirmer.voice = stack.pipeline
             log.debug("TIMING stage=voice_init ms=%.1f", (time.perf_counter() - t0) * 1000)

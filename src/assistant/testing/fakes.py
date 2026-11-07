@@ -138,9 +138,10 @@ class FakeSound:
         self.options: list[dict] = []        # until (the callable) and min_s of each play
         self.stopped = 0
 
-    def play(self, path: str, wait: bool, cancelled=None, *, until=None, min_s: float = 0.0) -> None:  # type: ignore[no-untyped-def]
+    def play(self, path: str, wait: bool, cancelled=None, *, until=None, min_s: float = 0.0,  # type: ignore[no-untyped-def]
+             volume: float = 1.0) -> None:
         self.played.append((path, wait))
-        self.options.append({"until": until, "min_s": min_s})
+        self.options.append({"until": until, "min_s": min_s, "volume": volume})
 
     def stop_all(self) -> None:
         self.stopped += 1

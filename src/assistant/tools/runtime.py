@@ -133,6 +133,7 @@ def build_tool_system(ctx: AppContext, *, platform: Platform | None = None, conf
 
     if isinstance(platform.sound, SoundEngine):    # routine sounds play where the assistant's voice plays
         platform.sound.device = lambda: ctx.config.data.voice.output_device
+        platform.sound.duck_level = lambda: ctx.config.data.voice.duck_percent / 100
     registry = ToolRegistry(gate, action_log, platform, normalizer, bus=ctx.bus, services=services)
     for module in (files, apps, media, system, screen, terminal, drivers, memory, routines):
         module.register(registry)

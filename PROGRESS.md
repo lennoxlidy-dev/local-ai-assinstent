@@ -119,7 +119,7 @@ src/assistant/
                        send2trash IFileOperation, Everything SDK, SHGetKnownFolderPath)
     inputs.py          SendInput (fixed-width ctypes structs, unit-tested layout)
     com.py             per-thread COM init; WinRT worker thread (MTA + asyncio)
-tests/                 pytest (400 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
+tests/                 pytest (419 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
                        the real speech models - each skipped when not installed)
 bench/                 llm_bench.py + cases.py: GPU latency + tool-calling accuracy per model;
                        perf_bench.py: every performance target of the spec (idle, wake, STT, TTS, fast path, LLM)
@@ -528,6 +528,23 @@ Version 0.1.4 (feedback: a gaming routine that "sounds like" a clip and starts e
   which destroyed the field being typed in (one character, then the focus was gone) - text edits now change the step
   in place (regression test types into the field). The gaming template starts with "Gaming mode activated. Have fun!".
 - The TikTok clip the request referred to couldn't be opened here (blocked); any sound file works as the intro.
+
+Version 0.1.5 (feedback: "add something to update all my drivers"):
+
+- **`driver_updates` tool** (tools/drivers.py; check | install) on the Windows Update Agent COM API
+  (`Microsoft.Update.Session`, criteria `IsInstalled=0 and Type='Driver' and IsHidden=0`) through PowerShell - the
+  official, signed drivers Windows offers for this hardware (same list as Optional updates → Driver updates).
+  *check* needs no admin (capability terminal.read). *install* searches first so the confirmation shows the exact
+  list, then needs a yes (capability software.install, risks install + admin - never "allow") and installs **only the
+  listed update ids** in one elevated PowerShell (UAC) - ids are validated as GUIDs before they go into the script.
+  It runs in the background (downloads take minutes; the assistant stays usable) with its own token, so "stop" never
+  cuts an installation in half; a notification reports installed/failed/restart-needed (or a cancelled UAC prompt).
+- Fast path EN/DE: "update (all) my drivers", "install the driver updates", "check for driver updates", "are my
+  drivers up to date", "aktualisiere meine Treiber", "Treiber aktualisieren", "gibt es neue Treiber-Updates"...
+- NVIDIA: the answer names the installed graphics driver and points to the NVIDIA App for the newest Game Ready
+  driver (Windows Update usually lags behind). OEM tools (Lenovo Vantage, Dell Command Update, …) are not used.
+- Tested with a fake PowerShell (search/installs/failures/cancelled UAC/errors); the WUA scripts themselves could not
+  run here (no Windows) - first real run pending.
 
 ## How to test
 

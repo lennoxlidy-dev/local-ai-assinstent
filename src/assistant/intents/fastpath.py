@@ -270,6 +270,35 @@ def routine_reply(res: ToolResult, lang: str) -> str:
     return f"{name}: erledigt." if lang == "de" else f"{name}: done."
 
 
+DRIVERS_UPDATE = P(r"(update (all )?(of )?(my |the |all my |all the )?drivers( now)?|install (the |all )?(new )?driver updates|"
+                   r"(aktualisiere|update|updatet?) (alle )?(meine |die )?treiber|"
+                   r"(alle )?(meine |die )?treiber (aktualisieren|updaten)|installiere (die |alle )?(neuen )?treiber[ -]?updates)")
+DRIVERS_CHECK = P(r"((check|look|search)( for| if there are)? (new |any )?driver updates|"
+                  r"are (my|the|all my|all the) drivers up to date|do i (need|have) (any )?(new )?driver updates|"
+                  r"any (new )?driver updates|(suche|prüfe|schau)( nach| ob es)? (neue )?treiber[ -]?updates( gibt)?|"
+                  r"sind (meine|die|alle meine|alle) treiber (aktuell|auf dem neuesten stand)|gibt es (neue )?treiber[ -]?updates)")
+
+
+def _n_updates(n: int, de: bool) -> str:
+    return (f"{n} Treiber-Update" + ("s" if n != 1 else "")) if de else (f"{n} driver update" + ("s" if n != 1 else ""))
+
+
+def drivers_reply(res: ToolResult, lang: str) -> str:
+    d, de = res.data or {}, lang == "de"
+    ups = d.get("updates") or []
+    gpu = (" Den neuesten NVIDIA-Treiber gibt es in der NVIDIA App." if de else
+           " The newest NVIDIA driver comes from the NVIDIA App.") if d.get("gpu") else ""
+    if not ups:
+        return ("Laut Windows Update sind deine Treiber aktuell." if de else
+                "Windows Update says your drivers are up to date.") + gpu
+    if d.get("started"):
+        return (f"Ich installiere {_n_updates(len(ups), True)} im Hintergrund und sage Bescheid, wenn es fertig ist."
+                if de else f"Installing {_n_updates(len(ups), False)} in the background - I'll tell you when it's done.")
+    names = ", ".join(u["title"] for u in ups[:3]) + (" …" if len(ups) > 3 else "")
+    return (f"{_n_updates(len(ups), True)} verfügbar: {names}. Sag „aktualisiere meine Treiber“, um sie zu installieren."
+            if de else f"{_n_updates(len(ups), False)} available: {names}. Say “update my drivers” to install them.") + gpu
+
+
 def _full(p: re.Pattern[str], t: str) -> re.Match[str] | None:
     return p.fullmatch(t)
 
@@ -363,6 +392,10 @@ class FastPath:
                               _forget_reply)
         if _full(LOCK, t):
             return FastIntent("lock", "power", {"action": "lock"}, _r("Locked.", "Gesperrt."))
+        if _full(DRIVERS_UPDATE, t):
+            return FastIntent("drivers.update", "driver_updates", {"action": "install"}, drivers_reply)
+        if _full(DRIVERS_CHECK, t):
+            return FastIntent("drivers.check", "driver_updates", {"action": "check"}, drivers_reply)
         if (m := _first(DESKTOP, t)) is not None:
             target = _DESK_MAP.get(m.group("t"), m.group("t"))
             return FastIntent("desktop.switch", "desktop", {"action": "switch", "target": target},

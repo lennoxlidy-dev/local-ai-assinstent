@@ -17,7 +17,7 @@ from ..storage.db import Database
 from ..storage.memory import MemoryStore
 from ..storage.routines import RoutineStore
 from ..storage.timers import TimerEntry, TimerStore
-from . import apps, files, media, memory, routines, screen, system, terminal
+from . import apps, drivers, files, media, memory, routines, screen, system, terminal
 from .apps import AppService
 from .base import ToolRegistry, ToolResult
 from .file_index import FileIndex
@@ -130,7 +130,7 @@ def build_tool_system(ctx: AppContext, *, platform: Platform | None = None, conf
         services["file_index"] = file_index
 
     registry = ToolRegistry(gate, action_log, platform, normalizer, bus=ctx.bus, services=services)
-    for module in (files, apps, media, system, screen, terminal, memory, routines):
+    for module in (files, apps, media, system, screen, terminal, drivers, memory, routines):
         module.register(registry)
     def policy_changed() -> None:
         ctx.bus.publish("permissions.changed")

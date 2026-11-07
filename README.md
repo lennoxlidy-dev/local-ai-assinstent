@@ -112,6 +112,7 @@ listens for 5 seconds for a follow-up without the name.
 | "Jarvis, what's on my screen?" | UI Automation / OCR / vision |
 | "Jarvis, remember that my sister's name is Lea" / "what do you know about me?" / "forget that …" | memory |
 | "Jarvis, gaming mode" / "start gaming mode" | runs your routine instantly (see [Routines](#routines)) |
+| "Jarvis, update my drivers" / "check for driver updates" | Windows Update: lists new drivers, asks, then installs (see [Driver updates](#driver-updates)) |
 | "Jarvis, stop" | stops talking and cancels the current request |
 
 - **Push-to-talk:** `Ctrl+Alt+Space` (no name needed). **Panic:** `Ctrl+Alt+Esc` silences it, cancels
@@ -149,6 +150,20 @@ Example: a gaming routine that sounds like a movie AI:
 
 "Jarvis, stop" or the panic hotkey also stops a routine's sound. The voice of the spoken lines is chosen in
 *Settings → Voice* (10 voices: F1–F5, M1–M5).
+
+## Driver updates
+
+Say **"Jarvis, update my drivers"**, or "check for driver updates" to only see what's available ("aktualisiere meine
+Treiber" in German). The assistant asks **Windows Update** for new drivers for your hardware. That's the same official,
+signed source as *Windows Settings → Windows Update → Advanced options → Optional updates → Driver updates*.
+
+1. It shows the exact list (name, date, size) and asks you first. Updates are never installed without your yes.
+2. After your yes, Windows shows its administrator (UAC) prompt, and only the listed updates are installed.
+3. Installing runs in the background, so you can keep using the assistant. A notification says when it's done and
+   whether a restart is needed. A running installation is never interrupted, not even by "stop".
+
+Your **NVIDIA graphics driver**: Windows Update usually offers an older version. The newest Game Ready driver comes
+from the NVIDIA App ("Jarvis, open NVIDIA App"). The answer tells you which driver version you have.
 
 ## Privacy and safety
 

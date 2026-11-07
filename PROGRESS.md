@@ -119,7 +119,7 @@ src/assistant/
                        send2trash IFileOperation, Everything SDK, SHGetKnownFolderPath)
     inputs.py          SendInput (fixed-width ctypes structs, unit-tested layout)
     com.py             per-thread COM init; WinRT worker thread (MTA + asyncio)
-tests/                 pytest (419 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
+tests/                 pytest (427 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
                        the real speech models - each skipped when not installed)
 bench/                 llm_bench.py + cases.py: GPU latency + tool-calling accuracy per model;
                        perf_bench.py: every performance target of the spec (idle, wake, STT, TTS, fast path, LLM)
@@ -545,6 +545,21 @@ Version 0.1.5 (feedback: "add something to update all my drivers"):
   driver (Windows Update usually lags behind). OEM tools (Lenovo Vantage, Dell Command Update, …) are not used.
 - Tested with a fake PowerShell (search/installs/failures/cancelled UAC/errors); the WUA scripts themselves could not
   run here (no Windows) - first real run pending.
+
+Version 0.1.6 (feedback: driver updates in a routine; a routine's sound should play until everything is done; a
+minimum time for the sound):
+
+- **Sound steps** get `until_done` ("keeps playing until the routine is done": repeats when shorter, fades out over 1 s
+  when the last step is done) and `min_seconds` ("at least … s": a shorter sound repeats; with until_done the fade
+  waits for it). `wait` + `until_done` is refused. The routine runner sets `Task.finished` when it ends (also the
+  request), which the sound polls. The playing logic moved to `audio/mci.py` (`play_session`, MCI only via a
+  `cmd(str)` callback) and is tested with a fake player on a fake clock (once / minimum / until + fade / stop /
+  a file that never starts isn't looped).
+- **Driver updates as a routine step** ("Check / update drivers": only check | install). Tools can return
+  `data["speak"]` ({en, de}); routines speak such a line when the step is done (driver check: "2 driver updates
+  available: …"), the voice command uses the same text.
+- Editor: the sound step has "how it ends" (once / then next step / until the routine is done) + "at least … s";
+  the driver step a check/install choice.
 
 ## How to test
 

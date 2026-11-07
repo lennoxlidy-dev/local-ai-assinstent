@@ -522,7 +522,10 @@ class WinSound:
             raise OSError(msg.value or f"MCI error {err}")
         return out.value
 
-    def play(self, path: str, wait: bool, cancelled: Callable[[], bool] | None = None) -> None:
+    def play(self, path: str, wait: bool, cancelled: Callable[[], bool] | None = None, *,
+             until: Callable[[], bool] | None = None, min_s: float = 0.0) -> None:
+        from ..audio.mci import play_session
+
         stop, done, errors = threading.Event(), threading.Event(), []
         with self._lock:
             self._n += 1
@@ -531,20 +534,8 @@ class WinSound:
 
         def run() -> None:
             try:
-                self._cmd(f'open "{path}" type mpegvideo alias {alias}')
-                try:
-                    self._cmd(f"play {alias}")
-                    t0, seen = time.monotonic(), False
-                    while not stop.wait(0.1):
-                        if cancelled is not None and cancelled():
-                            break
-                        mode = self._cmd(f"status {alias} mode")     # playing | stopped | not ready | seeking ...
-                        seen = seen or mode == "playing"
-                        took = time.monotonic() - t0
-                        if (mode == "stopped" and (seen or took > 1.5)) or took > self.MAX_S:
-                            break
-                finally:
-                    self._cmd(f"close {alias}")
+                play_session(self._cmd, alias, path, stop=stop, cancelled=cancelled, until=until, min_s=min_s,
+                             max_s=self.MAX_S)
             except OSError as e:
                 errors.append(e)
             finally:

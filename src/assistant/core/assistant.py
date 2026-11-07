@@ -226,6 +226,7 @@ class Assistant:
         except Cancelled:
             reply = Reply(self._t("cancelled"), ok=False, via="cancelled")
         finally:
+            task.finished.set()
             self._current = None
             self._lock.release()
             self.ctx.state.update(phase=Phase.DONE)

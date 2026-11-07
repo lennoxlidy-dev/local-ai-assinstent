@@ -266,7 +266,7 @@ class SettingsWindow(QObject):
         from ..tools.routines import NOT_IN_ROUTINES
 
         store = self.d.tools.services["routines"]
-        first = ["say", "play_sound", "wait", "open_app", "volume", "media", "play_music", "desktop"]
+        first = ["say", "play_sound", "wait", "open_app", "volume", "media", "play_music", "desktop", "driver_updates"]
         names = first + sorted(n for n in self.d.tools.registry.names() if n not in NOT_IN_ROUTINES and n not in first)
         lang = self._lang()
         self.model.set(routines=[{"name": r.name, "description": r.description,

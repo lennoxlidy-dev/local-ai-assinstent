@@ -119,7 +119,8 @@ class AudioBackend(Protocol):
 
 
 class SoundBackend(Protocol):
-    def play(self, path: str, wait: bool, cancelled: Callable[[], bool] | None = None) -> None: ...
+    def play(self, path: str, wait: bool, cancelled: Callable[[], bool] | None = None, *,
+             until: Callable[[], bool] | None = None, min_s: float = 0.0) -> None: ...
     def stop_all(self) -> None: ...
 
 

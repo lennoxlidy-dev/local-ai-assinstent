@@ -118,6 +118,8 @@ class Task:
     #: speak text right away (voice requests: the same sentence stream the LLM's answer uses); routines'
     #: "say" steps use it so an announcement comes when its step is reached, not after the whole routine
     say: Callable[[str], None] | None = field(default=None, repr=False, compare=False)
+    #: set when the routine (or the request) is done - a routine's sound can play until then
+    finished: threading.Event = field(default_factory=threading.Event, repr=False, compare=False)
 
 
 @dataclass

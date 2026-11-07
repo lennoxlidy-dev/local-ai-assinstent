@@ -338,10 +338,23 @@ def test_routine_editor_sound_and_announcement_steps(sw, tmp_path):
         _pump(3)
     assert shiboken6.isValid(field) and field.hasActiveFocus()          # not rebuilt while typing
     assert field.property("text") == "Gaming mode on!!"
+    # the sound: "keeps playing until the routine is done", at least 8 s
+    from PySide6.QtCore import Q_ARG
+
+    end = next(i for i in visual(tab) if i.objectName() == "soundEnd" and i.isVisible())
+    QMetaObject.invokeMethod(end, "chosen", Q_ARG("QVariant", "until"))
+    _pump(3)
+    minimum = next(i for i in visual(tab) if i.objectName() == "soundMin" and i.isVisible())
+    minimum.forceActiveFocus()
+    minimum.setProperty("cursorPosition", 1)
+    for kind in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+        QGuiApplication.sendEvent(w.window, QKeyEvent(kind, Qt.Key.Key_8, Qt.KeyboardModifier.NoModifier, "8"))
+    _pump(3)
+    assert shiboken6.isValid(minimum) and minimum.property("text") == "08"
     QMetaObject.invokeMethod(tab, "save")
     steps = system.services["routines"].get("Gaming mode").steps
     assert steps[0] == {"tool": "say", "args": {"text": "Gaming mode on!!"}}
-    assert steps[1]["tool"] == "play_sound" and steps[1]["args"]["path"] == str(intro)
+    assert steps[1] == {"tool": "play_sound", "args": {"path": str(intro), "until_done": True, "min_seconds": 8}}
 
     spoken = []
 
@@ -359,5 +372,6 @@ def test_routine_editor_sound_and_announcement_steps(sw, tmp_path):
     while time.time() < deadline and not (spoken and system.registry.platform.sound.played):
         time.sleep(0.02)
     assert spoken == ["Gaming mode on!!"] and system.registry.platform.sound.played == [(str(intro), False)]
+    assert system.registry.platform.sound.options[0]["min_s"] == 8.0
     w.window.close()                      # like the X button (frees the QML before the fixture ends)
     _pump()

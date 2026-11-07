@@ -279,24 +279,9 @@ DRIVERS_CHECK = P(r"((check|look|search)( for| if there are)? (new |any )?driver
                   r"sind (meine|die|alle meine|alle) treiber (aktuell|auf dem neuesten stand)|gibt es (neue )?treiber[ -]?updates)")
 
 
-def _n_updates(n: int, de: bool) -> str:
-    return (f"{n} Treiber-Update" + ("s" if n != 1 else "")) if de else (f"{n} driver update" + ("s" if n != 1 else ""))
-
-
 def drivers_reply(res: ToolResult, lang: str) -> str:
-    d, de = res.data or {}, lang == "de"
-    ups = d.get("updates") or []
-    gpu = (" Den neuesten NVIDIA-Treiber gibt es in der NVIDIA App." if de else
-           " The newest NVIDIA driver comes from the NVIDIA App.") if d.get("gpu") else ""
-    if not ups:
-        return ("Laut Windows Update sind deine Treiber aktuell." if de else
-                "Windows Update says your drivers are up to date.") + gpu
-    if d.get("started"):
-        return (f"Ich installiere {_n_updates(len(ups), True)} im Hintergrund und sage Bescheid, wenn es fertig ist."
-                if de else f"Installing {_n_updates(len(ups), False)} in the background - I'll tell you when it's done.")
-    names = ", ".join(u["title"] for u in ups[:3]) + (" …" if len(ups) > 3 else "")
-    return (f"{_n_updates(len(ups), True)} verfügbar: {names}. Sag „aktualisiere meine Treiber“, um sie zu installieren."
-            if de else f"{_n_updates(len(ups), False)} available: {names}. Say “update my drivers” to install them.") + gpu
+    speak = (res.data or {}).get("speak") if isinstance(res.data, dict) else None
+    return (speak or {}).get(lang) or res.text
 
 
 def _full(p: re.Pattern[str], t: str) -> re.Match[str] | None:

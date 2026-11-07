@@ -12,7 +12,7 @@ from typing import Any
 from .apps import DesktopGuard, _svc, open_app, window_matches
 from .base import Plan, Tool, ToolContext, ToolError, ToolRegistry, ToolResult
 from .platform import UiElement
-from .schema import Bool, Str, obj
+from .schema import Bool, Int, Str, obj
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +53,8 @@ def _plan_sound(a: dict[str, Any], ctx: ToolContext) -> Plan:
     ext = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
     if ext not in SOUND_EXT:
         raise ToolError(f"{name} is not a sound file - use an MP3 or WAV file.")
+    if a.get("wait") and a.get("until_done"):
+        raise ToolError("A sound can either play before the next step (wait) or until the routine is done - not both.")
     return Plan(f"Play the sound {name}", paths=[(a["path"], "read")], capability="media")
 
 
@@ -60,10 +62,13 @@ def _run_sound(a: dict[str, Any], ctx: ToolContext, plan: Plan) -> ToolResult:
     p = Path(ctx.path(a["path"]).path)
     if not p.is_file():
         raise ToolError(f"The sound file {p} doesn't exist (any more).")
-    wait = bool(a.get("wait"))
-    token = ctx.task.cancel
-    ctx.platform.sound.play(str(p), wait, (lambda: token.cancelled) if wait else None)
-    return ToolResult(True, f"Played {p.name}." if wait else f"Playing {p.name}.")
+    wait, until_done, min_s = bool(a.get("wait")), bool(a.get("until_done")), float(a.get("min_seconds") or 0)
+    token, finished = ctx.task.cancel, ctx.task.finished
+    ctx.platform.sound.play(str(p), wait, (lambda: token.cancelled) if wait else None,
+                            until=finished.is_set if until_done else None, min_s=min_s)
+    how = (" until the routine is done" if until_done else "") + (f" (at least {min_s:g} s)" if min_s else "")
+    return ToolResult(True, (f"Played {p.name}." if wait else f"Playing {p.name}") + (how if not wait else "")
+                      + ("" if wait else "."))
 
 
 def pick_play_button(elements: list[UiElement]) -> UiElement | None:
@@ -143,7 +148,9 @@ def register(reg: ToolRegistry) -> None:
     reg.register(Tool(   # for routines ("gaming mode" starts with your sound); not offered to the language model
         "play_sound", "Play a sound file (MP3 or WAV) in the background, e.g. at the start of a routine.",
         obj(("path",), path=Str("The sound file", min_len=1, max_len=400),
-            wait=Bool("Wait until the sound has finished before the next step")),
+            wait=Bool("Wait until the sound has finished before the next step"),
+            until_done=Bool("Keep playing (repeating) until the routine is done, then fade out"),
+            min_seconds=Int("Play at least this many seconds (a shorter sound repeats)", min=0, max=600)),
         "media", _plan_sound, _run_sound, llm=False))
 
 

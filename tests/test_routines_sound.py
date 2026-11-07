@@ -53,7 +53,7 @@ def test_saying_the_name_runs_the_routine_and_speaks_as_it_goes(ts):
     system, p, _conf, home = ts
     intro = _music(home)
     order = []
-    p.sound.play = lambda path, wait, cancelled=None: order.append(("sound", path))
+    p.sound.play = lambda path, wait, cancelled=None, **kw: order.append(("sound", path))
     launch = p.apps.launch
     p.apps.launch = lambda app, *a, **k: (order.append(("open", app.name)), launch(app, *a, **k))[1]
     system.services["routines"].save(Routine("Gaming mode", [
@@ -90,3 +90,117 @@ def test_stop_also_stops_a_routine_sound(ts):
     a = Assistant(system.ctx, system, None)
     a.handle("stop")
     assert p.sound.stopped == 1
+
+
+# ---------------------------------------------------------------------- the playing logic (fake MCI, fake clock)
+class _Clock:
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+
+class _Ticks:
+    """Stands in for the stop event: wait() moves the fake clock instead of sleeping."""
+
+    def __init__(self, clock, stop_at=None):
+        self.clock, self.stop_at = clock, stop_at
+
+    def wait(self, dt):
+        self.clock.t = round(self.clock.t + dt, 3)
+        return self.stop_at is not None and self.clock.t >= self.stop_at
+
+
+class _Mci:
+    """A sound of ``length`` seconds: 'status … mode' says playing until it has run that long."""
+
+    def __init__(self, length, clock, broken=False):
+        self.length, self.clock, self.broken = length, clock, broken
+        self.plays, self.volumes, self.closed, self.started = 0, [], False, 0.0
+
+    def __call__(self, cmd):
+        if cmd.startswith("play "):
+            self.plays += 1
+            self.started = self.clock()
+        elif cmd.startswith("status "):
+            return "stopped" if self.broken or self.clock() - self.started >= self.length else "playing"
+        elif cmd.startswith("setaudio "):
+            self.volumes.append(int(cmd.rsplit(" ", 1)[1]))
+        elif cmd.startswith("close "):
+            self.closed = True
+        return ""
+
+
+def _session(length, *, until_at=None, min_s=0.0, stop_at=None, broken=False):
+    from assistant.audio.mci import play_session
+
+    clock = _Clock()
+    mci = _Mci(length, clock, broken)
+    until = (lambda: clock.t >= until_at) if until_at is not None else None
+    play_session(mci, "s1", "C:\\x.wav", stop=_Ticks(clock, stop_at), until=until, min_s=min_s, clock=clock)
+    return mci, clock.t
+
+
+def test_a_sound_plays_once():
+    mci, end = _session(3.0)
+    assert mci.plays == 1 and 3.0 <= end < 3.3 and mci.closed and mci.volumes == []
+
+
+def test_a_minimum_time_repeats_a_short_sound():
+    mci, end = _session(3.0, min_s=7.0)
+    assert mci.plays == 3 and 9.0 <= end < 9.5          # 3 rounds: it finishes the last one, no cut-off
+
+
+def test_until_the_routine_is_done_repeats_then_fades_out():
+    mci, end = _session(3.0, until_at=8.0)
+    assert mci.plays == 3 and 9.0 <= end < 9.3          # done at 8 s, then a 1 s fade
+    assert mci.volumes == [900, 800, 700, 600, 500, 400, 300, 200, 100, 0]
+
+
+def test_until_done_still_keeps_the_minimum_time():
+    mci, end = _session(10.0, until_at=2.0, min_s=5.0)
+    assert mci.plays == 1 and 6.0 <= end < 6.3 and mci.volumes[-1] == 0
+
+
+def test_stop_ends_a_sound_at_once():
+    mci, end = _session(30.0, until_at=99.0, stop_at=1.0)
+    assert end == 1.0 and mci.closed and mci.volumes == []
+
+
+def test_a_sound_that_never_plays_is_not_repeated():
+    mci, end = _session(3.0, min_s=30.0, broken=True)
+    assert mci.plays == 1 and end < 2.0 and mci.closed
+
+
+# ---------------------------------------------------------------------- the step's options in a routine
+def test_until_done_and_minimum_reach_the_player(ts):
+    system, p, _conf, home = ts
+    intro = _music(home, "intro.wav")
+    system.services["routines"].save(Routine("Gaming mode", [
+        {"tool": "play_sound", "args": {"path": str(intro), "until_done": True, "min_seconds": 8}},
+        {"tool": "open_app", "args": {"name": "Steam"}}]))
+    a = Assistant(system.ctx, system, None)
+    assert a.handle("gaming mode").ok
+    opts = p.sound.options[-1]
+    assert opts["min_s"] == 8.0 and opts["until"]() is True       # the routine is done -> may end now
+    assert not system.invoke("play_sound", {"path": str(intro), "wait": True, "until_done": True}, Task()).ok
+
+
+def test_a_routine_can_check_drivers_and_say_the_result(ts):
+    import json
+
+    from assistant.tools.platform import CommandOutput
+
+    system, p, *_ = ts
+    upd = {"id": "11111111-2222-3333-4444-555555555555", "title": "Intel Corporation - Display - 31.0.101.5186",
+           "size": 1, "date": "2026-09-30"}
+    p.shell.run = lambda *a: CommandOutput(0, json.dumps([upd]), "")
+    system.services["routines"].save(Routine("Maintenance", [
+        {"tool": "say", "args": {"text": "Checking your drivers"}},
+        {"tool": "driver_updates", "args": {"action": "check"}}]))
+    spoken = []
+    r = Assistant(system.ctx, system, None).handle("start maintenance", source="voice", on_content=spoken.append)
+    assert r.ok and r.text == ("Checking your drivers. 1 driver update available: Intel Corporation - Display - "
+                               "31.0.101.5186. Say “update my drivers” to install them.")
+    assert [x.strip() for x in spoken] == ["Checking your drivers.", r.text[len("Checking your drivers. "):]]

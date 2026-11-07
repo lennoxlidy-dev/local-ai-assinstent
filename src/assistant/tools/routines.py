@@ -46,7 +46,29 @@ def validate_steps(reg: ToolRegistry, steps: list[dict[str, Any]]) -> list[dict[
     return clean
 
 
+def _say(ctx: ToolContext, text: str, said: list[str]) -> None:
+    said.append(text)
+    if ctx.task.say is not None:          # voice request: speak it now, while the next steps run
+        ctx.task.say(text + " ")
+
+
+def _spoken(res: ToolResult, ctx: ToolContext) -> str:
+    """A step's own spoken result (e.g. "2 driver updates available …"), in the user's language."""
+    speak = res.data.get("speak") if isinstance(res.data, dict) else None
+    if isinstance(speak, dict):
+        lang = ctx.services["config_get"]("general.language") if "config_get" in ctx.services else "en"
+        return str(speak.get(lang) or speak.get("en") or "")
+    return str(speak or "")
+
+
 def run_routine(reg: ToolRegistry, routine: Routine, ctx: ToolContext) -> ToolResult:
+    try:
+        return _run_steps(reg, routine, ctx)
+    finally:
+        ctx.task.finished.set()           # sounds that play "until the routine is done" fade out now
+
+
+def _run_steps(reg: ToolRegistry, routine: Routine, ctx: ToolContext) -> ToolResult:
     lines, said, ok_all = [], [], True
     for i, step in enumerate(routine.steps, 1):
         ctx.check_cancel()
@@ -59,13 +81,13 @@ def run_routine(reg: ToolRegistry, routine: Routine, ctx: ToolContext) -> ToolRe
             text = str(args.get("text", "")).strip()
             if text:
                 text += "" if text[-1] in ".!?…" else "."
-                said.append(text)
                 lines.append(text)
-                if ctx.task.say is not None:          # voice request: speak it now, while the next steps run
-                    ctx.task.say(text + " ")
+                _say(ctx, text, said)
             continue
         res = reg.invoke(name, args, ctx.task)
         ok_all &= res.ok
+        if res.ok and (spoken := _spoken(res, ctx)):
+            _say(ctx, spoken, said)
         lines.append(f"{i}. {name}: {res.text.splitlines()[0] if res.text else ('ok' if res.ok else 'failed')}")
     head = f"Routine “{routine.name}” {'done' if ok_all else 'finished with problems'}."
     return ToolResult(ok_all, head + "\n" + "\n".join(x for x in lines if x),

@@ -120,6 +120,32 @@ def _gpu_note() -> str:
             "Game Ready driver comes from the NVIDIA App.")
 
 
+def _n_updates(n: int, de: bool) -> str:
+    return (f"{n} Treiber-Update" + ("s" if n != 1 else "")) if de else (f"{n} driver update" + ("s" if n != 1 else ""))
+
+
+def spoken(data: dict[str, Any], lang: str) -> str:
+    """What the assistant says about it (voice command, or a routine step)."""
+    de = lang == "de"
+    ups = data.get("updates") or []
+    gpu = (" Den neuesten NVIDIA-Treiber gibt es in der NVIDIA App." if de else
+           " The newest NVIDIA driver comes from the NVIDIA App.") if data.get("gpu") else ""
+    if not ups:
+        return ("Laut Windows Update sind deine Treiber aktuell." if de else
+                "Windows Update says your drivers are up to date.") + gpu
+    if data.get("started"):
+        return (f"Ich installiere {_n_updates(len(ups), True)} im Hintergrund und sage Bescheid, wenn es fertig ist."
+                if de else f"Installing {_n_updates(len(ups), False)} in the background - I'll tell you when it's done.")
+    names = ", ".join(u["title"] for u in ups[:3]) + (" …" if len(ups) > 3 else "")
+    return (f"{_n_updates(len(ups), True)} verfügbar: {names}. Sag „aktualisiere meine Treiber“, um sie zu installieren."
+            if de else f"{_n_updates(len(ups), False)} available: {names}. Say “update my drivers” to install them.") + gpu
+
+
+def _result(ok: bool, text: str, data: dict[str, Any]) -> ToolResult:
+    data["speak"] = {"en": spoken(data, "en"), "de": spoken(data, "de")}
+    return ToolResult(ok, text, data=data)
+
+
 # ---------------------------------------------------------------------------------------------- the tool
 
 def _plan(a: dict[str, Any], ctx: ToolContext) -> Plan:
@@ -139,12 +165,12 @@ def _run(a: dict[str, Any], ctx: ToolContext, plan: Plan) -> ToolResult:
     gpu = _gpu_note()
     data: dict[str, Any] = {"updates": updates, "gpu": gpu, "started": False}
     if not updates:
-        return ToolResult(True, "Windows Update has no driver updates - your drivers are up to date."
-                          + (f"\n{gpu}" if gpu else ""), data=data)
+        return _result(True, "Windows Update has no driver updates - your drivers are up to date."
+                       + (f"\n{gpu}" if gpu else ""), data)
     lines = [f"- {describe_update(u)}" for u in updates]
     if a["action"] == "check":
-        return ToolResult(True, f"{len(updates)} driver update(s) available:\n" + "\n".join(lines)
-                          + (f"\n{gpu}" if gpu else ""), data=data)
+        return _result(True, f"{len(updates)} driver update(s) available:\n" + "\n".join(lines)
+                       + (f"\n{gpu}" if gpu else ""), data)
     script = install_script([u["id"] for u in updates])
     shell, bus = ctx.platform.shell, ctx.bus
 
@@ -181,9 +207,9 @@ def _run(a: dict[str, Any], ctx: ToolContext, plan: Plan) -> ToolResult:
 
     threading.Thread(target=install, name="driver-updates", daemon=True).start()
     data["started"] = True
-    return ToolResult(True, f"Installing {len(updates)} driver update(s) in the background (Windows asks for "
-                      "administrator rights). A notification says when they're done - some need a restart.\n"
-                      + "\n".join(lines), data=data)
+    return _result(True, f"Installing {len(updates)} driver update(s) in the background (Windows asks for "
+                   "administrator rights). A notification says when they're done - some need a restart.\n"
+                   + "\n".join(lines), data)
 
 
 def register(reg: ToolRegistry) -> None:

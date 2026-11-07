@@ -136,7 +136,8 @@ without the language model. Create routines in the setup wizard, from a template
 | Step | What it does |
 |---|---|
 | **Say something** | speaks a sentence the moment the routine reaches it, e.g. "Gaming mode activated. All systems online." |
-| **Play a sound** | plays an MP3 or WAV file in the background (no player window). Click **Choose sound…**; switch on "Wait until it ends" to start the next step only after the sound |
+| **Play a sound** | plays an MP3 or WAV file (no player window). Click **Choose sound…**, then choose how it ends: **Plays once**; **Plays once, then the next step**; or **Keeps playing until the routine is done** (repeats if it's shorter, fades out when the last step is done). **at least … s** makes it play at least that long (a short sound repeats) |
+| **Check / update drivers** | **Only check** says which driver updates Windows Update has; **Install** asks first and shows the Windows administrator prompt (see [Driver updates](#driver-updates)) |
 | **Open an app** | e.g. Steam, Discord, your game launcher (`{"name": "Steam"}`) |
 | **Volume**, **Media**, **Play music**, **Virtual desktop**, **Wait**, … | everything the assistant can do, with the same permission checks |
 
@@ -144,9 +145,13 @@ Example: a gaming routine that sounds like a movie AI:
 
 1. *Settings → Routines → From template → Gaming mode* (Steam, Discord, volume 40 % and "Gaming mode activated").
 2. **+ Add step → Play a sound**, then click **Choose sound…** and pick your intro sound (any MP3/WAV on your PC).
-   Move it to the top with ↑ so it plays while everything starts.
+   Move it to the top with ↑, choose **Keeps playing until the routine is done**, and set e.g. **at least 10 s**, so the
+   music plays while everything starts and fades out at the end.
 3. Change the **Say something** text to your own line, add more **Open an app** steps (e.g. your game), then **Save**.
 4. **▶ Run now** tries it, or just say **"Jarvis, gaming mode"**.
+
+A maintenance routine could be: **Say something** "Checking your drivers", then **Check / update drivers → Only
+check**. It says the result, e.g. "2 driver updates available: …".
 
 "Jarvis, stop" or the panic hotkey also stops a routine's sound. The voice of the spoken lines is chosen in
 *Settings → Voice* (10 voices: F1–F5, M1–M5).

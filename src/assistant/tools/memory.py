@@ -23,8 +23,8 @@ def _run_remember(a: dict[str, Any], ctx: ToolContext, plan: Plan) -> ToolResult
 def _run_recall(a: dict[str, Any], ctx: ToolContext, plan: Plan) -> ToolResult:
     facts = _store(ctx).search(a.get("query", ""), a["limit"])
     if not facts:
-        return ToolResult(True, "I don't have anything remembered about that.")
-    return ToolResult(True, "\n".join(f"#{f.id}: {f.text}" for f in facts))
+        return ToolResult(True, "I don't have anything remembered about that.", data={"facts": []})
+    return ToolResult(True, "\n".join(f"#{f.id}: {f.text}" for f in facts), data={"facts": [f.text for f in facts]})
 
 
 def _plan_forget(a: dict[str, Any], ctx: ToolContext) -> Plan:
@@ -38,20 +38,25 @@ def _run_forget(a: dict[str, Any], ctx: ToolContext, plan: Plan) -> ToolResult:
     if "id" in a:
         ok = store.delete(a["id"])
         return ToolResult(ok, "Forgotten." if ok else "No fact with that id.")
-    matches = store.search(a["query"], 5)
-    if not matches:
+    scored = store.search_scored(a["query"], 5, min_score=60)
+    if not scored:
         return ToolResult(False, "I don't have anything like that remembered.")
-    if len(matches) > 1 and not a.get("all"):
-        listing = "\n".join(f"#{f.id}: {f.text}" for f in matches)
+    if not a.get("all") and len(scored) > 1 and scored[0][0] - scored[1][0] >= 12:
+        scored = scored[:1]          # one clear best match
+    if len(scored) > 1 and not a.get("all"):
+        listing = "\n".join(f"#{f.id}: {f.text}" for _, f in scored)
         return ToolResult(False, f"Several facts match; which one (id)?\n{listing}")
-    for f in matches:
+    for _, f in scored:
         store.delete(f.id)
-    return ToolResult(True, f"Forgotten: {matches[0].text}" if len(matches) == 1 else f"Forgot {len(matches)} facts.")
+    first = scored[0][1].text
+    return ToolResult(True, f"Forgotten: {first}" if len(scored) == 1 else f"Forgot {len(scored)} facts.",
+                      data={"forgotten": [f.text for _, f in scored]})
 
 
 def register(reg: ToolRegistry) -> None:
     reg.register(Tool(
-        "remember", "Store a fact about the user for later (they said 'remember that ...').",
+        "remember", "Store a fact about the user for later (they said 'remember that ...'). If it corrects "
+                    "something already remembered, call forget for the old fact first.",
         obj(("fact",), fact=Str("The fact, as a short self-contained sentence", min_len=3, max_len=500)),
         "memory", lambda a, c: Plan(f"Remember: {a['fact']}", capability="memory"), _run_remember))
     reg.register(Tool(

@@ -26,6 +26,7 @@ class TrayController(QObject):
     quit_requested = Signal()
     settings_requested = Signal()
     ask_requested = Signal()
+    setup_requested = Signal()
 
     def __init__(self, ctx: AppContext, parent: QObject | None = None):
         super().__init__(parent)
@@ -64,6 +65,10 @@ class TrayController(QObject):
         self.act_settings = QAction("Settings…", m)
         self.act_settings.triggered.connect(self.settings_requested.emit)
         m.addAction(self.act_settings)
+
+        self.act_setup = QAction("Setup wizard…", m)
+        self.act_setup.triggered.connect(self.setup_requested.emit)
+        m.addAction(self.act_setup)
 
         self.act_pause = QAction("Pause listening", m, checkable=True)
         self.act_pause.toggled.connect(lambda on: self.ctx.state.update(paused=on))

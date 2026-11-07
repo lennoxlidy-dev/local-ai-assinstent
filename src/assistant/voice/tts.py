@@ -97,6 +97,7 @@ class Speaker:
         self.threads = threads
         self.keep_loaded_s = keep_loaded_min * 60
         self._last_use = 0.0
+        self._warned = False
         self._tts = None
         self._lock = threading.Lock()
         self._q: queue.Queue[tuple[str, str, int, float, CancelToken] | None] = queue.Queue()
@@ -156,6 +157,10 @@ class Speaker:
             self.player.wait(0.05)
         return True
 
+    def unload(self) -> None:
+        with self._lock:
+            self._tts = None
+
     def unload_if_idle(self) -> bool:
         """Free the speech model's RAM after a quiet spell (it is preloaded again at the next wake word)."""
         if self._tts is None or self.keep_loaded_s <= 0 or not self._idle.is_set():
@@ -202,6 +207,10 @@ class Speaker:
                     if self.first_audio_at is None:
                         self.first_audio_at = time.perf_counter()
                     self.player.play(samples, sr)
+            except OSError as e:          # no audio output device (or it disappeared)
+                if not self._warned:
+                    self._warned = True
+                    log.warning("speech output unavailable: %s", e)
             except Exception:
                 log.exception("text-to-speech failed")
             finally:

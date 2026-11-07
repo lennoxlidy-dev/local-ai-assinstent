@@ -76,21 +76,55 @@ class Profile:
     language: str = "en"
     personality: str = "friendly"
     answer_length: str = "short"
-    facts: list[str] = field(default_factory=list)
+    facts: list[str] = field(default_factory=list)   # newest first
+    about: str = ""
+    location: str = ""
 
 
-def system_prompt(p: Profile, max_facts: int = 25) -> str:
+#: The profile block must stay small: it is part of every request's prompt (cached, but re-processed
+#: whenever a fact changes). Older facts beyond the budget stay reachable through the recall tool.
+FACT_CHARS = 1500
+FACT_MAX = 25
+
+
+def profile_block(p: Profile, lang: str, max_facts: int = FACT_MAX, char_budget: int = FACT_CHARS) -> str:
+    de = lang == "de"
+    lines: list[str] = []
+    if p.about:
+        lines.append(("Über den Nutzer: " if de else "About the user: ") + _clip(p.about, 400))
+    if p.location:
+        lines.append(("Wohnort des Nutzers: " if de else "The user lives in: ") + _clip(p.location, 80))
+    out = ""
+    if lines:
+        out += "\n\n" + "\n".join(lines)
+    if p.facts:
+        used, shown = 0, []
+        for f in p.facts[:max_facts]:
+            f = _clip(f, 200)
+            if used + len(f) > char_budget:
+                break
+            shown.append(f)
+            used += len(f) + 3
+        head = "Was du über den Nutzer weißt (gemerkt):" if de else "What you know about the user (remembered):"
+        out += "\n\n" + head + "".join(f"\n- {f}" for f in shown)
+        if len(shown) < len(p.facts):
+            out += ("\n(Ältere gemerkte Fakten findest du mit dem Tool recall.)" if de
+                    else "\n(Older remembered facts: use the recall tool.)")
+    if p.user_name:
+        out += (f"\nNenne den Nutzer {p.user_name}." if de else f"\nCall the user {p.user_name}.")
+    return out
+
+
+def _clip(text: str, n: int) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= n else text[: n - 1].rstrip() + "…"
+
+
+def system_prompt(p: Profile, max_facts: int = FACT_MAX) -> str:
     lang = p.language if p.language in ("en", "de") else "en"
     tpl = SYSTEM_DE if lang == "de" else SYSTEM_EN
     user = p.user_name or ("dem Nutzer" if lang == "de" else "the user")
-    if lang == "de" and p.user_name:
-        user = p.user_name
-    profile = ""
-    if p.facts:
-        head = "\n\nWas du über den Nutzer weißt:" if lang == "de" else "\n\nWhat you know about the user:"
-        profile = head + "".join(f"\n- {f}" for f in p.facts[:max_facts])
-    if p.user_name:
-        profile += (f"\nNenne den Nutzer {p.user_name}." if lang == "de" else f"\nCall the user {p.user_name}.")
+    profile = profile_block(p, lang, max_facts)
     return tpl.format(name=p.assistant_name, user=user,
                       personality=PERSONALITY[lang].get(p.personality, PERSONALITY[lang]["friendly"]),
                       length=LENGTH[lang].get(p.answer_length, LENGTH[lang]["short"]), profile=profile)

@@ -62,6 +62,26 @@ def _r(en: str, de: str) -> Reply:
     return lambda res, lang: (de if lang == "de" else en).format(**(res.data or {}))
 
 
+def _facts_reply(res: ToolResult, lang: str, spoken_max: int = 5) -> str:
+    facts = list((res.data or {}).get("facts", []))
+    de = lang == "de"
+    if not facts:
+        return "Ich habe mir noch nichts über dich gemerkt." if de else "I haven't remembered anything about you yet."
+    shown = "; ".join(f.rstrip(". ") for f in facts[:spoken_max])
+    more = len(facts) - spoken_max
+    if de:
+        tail = f" - und {more} weitere Dinge." if more > 0 else "."
+        return f"Du hast mir {len(facts)} {'Sache' if len(facts) == 1 else 'Sachen'} erzählt: {shown}{tail}"
+    tail = f" - and {more} more." if more > 0 else "."
+    return f"You told me {len(facts)} thing{'s' if len(facts) != 1 else ''}: {shown}{tail}"
+
+
+def _forget_reply(res: ToolResult, lang: str) -> str:
+    gone = (res.data or {}).get("forgotten", [])
+    what = gone[0].rstrip(". ") if gone else ""
+    return (f"Okay, vergessen: {what}." if lang == "de" else f"Okay, I forgot: {what}.") if what else res.text
+
+
 def _volume_reply(res: ToolResult, lang: str) -> str:
     d = res.data or {}
     if d.get("muted"):
@@ -154,6 +174,17 @@ REMEMBER = [P(r"(please )?remember:? (that |this:? )?(?P<fact>.{3,})"),
             P(r"(merk|merke) (dir|euch):?( bitte)?:? (dass |das:? |folgendes:? )?(?P<fact>.{3,})"),
             P(r"vergiss nicht,? (dass )?(?P<fact>.{3,})"),
             P(r"speicher(e)? (dir )?,? dass (?P<fact>.{3,})")]
+
+MEMORY_LIST = P(r"(what do you (know|remember) about me|what (else )?do you know about me|"
+                r"what have you (remembered|saved|stored)( about me)?|what do you remember|"
+                r"what did i (tell you|ask you) to remember|"
+                r"was weißt du (denn |alles |noch )?über mich|was hast du dir (alles |denn )?(über mich )?gemerkt|"
+                r"woran erinnerst du dich|was hast du (alles )?(über mich )?gespeichert)")
+FORGET = [P(r"(please )?forget (that |about |the fact that )?(?P<q>.{3,})"),
+          P(r"(vergiss|vergesse),? (bitte )?(dass |das mit |die sache mit )?(?P<q>.{3,})"),
+          P(r"lösch(e)? (die |deine )?erinnerung,? (an |daran,? dass |dass )(?P<q>.{3,})")]
+_NOT_FORGET = {"it", "that", "this", "about it", "everything", "all", "all of it", "all that", "es", "das",
+               "alles", "das alles", "nichts", "es einfach", "das einfach"}
 
 LOCK = P(r"(lock( (the|my))?( (pc|computer|screen|laptop|workstation|windows))?|"
          r"(den |die |meinen )?(pc|computer|bildschirm|laptop|rechner) sperren|"
@@ -278,6 +309,12 @@ class FastPath:
             fact = original_slot(text, m.group("fact"))
             return FastIntent("memory.remember", "remember", {"fact": fact},
                               _r("OK, I'll remember that.", "Okay, ich merke mir das."))
+        if _full(MEMORY_LIST, t):
+            return FastIntent("memory.list", "recall", {"query": "", "limit": 50}, _facts_reply)
+        if (m := _first(FORGET, t)) is not None and m.group("q") not in _NOT_FORGET \
+                and not m.group("q").startswith(("nicht", "not ")):
+            return FastIntent("memory.forget", "forget", {"query": original_slot(text, m.group("q"))},
+                              _forget_reply)
         if _full(LOCK, t):
             return FastIntent("lock", "power", {"action": "lock"}, _r("Locked.", "Gesperrt."))
         if (m := _first(DESKTOP, t)) is not None:

@@ -4,6 +4,7 @@
     python -m assistant --cli        text-mode debug CLI
     python -m assistant --debug      tray app + log to the console
     python -m assistant --smoke-test 3   start, run 3 s, quit (automated check)
+    python -m assistant --onboarding     open the setup wizard again
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--autostart", action="store_true", help=argparse.SUPPRESS)  # launched at login
     p.add_argument("--smoke-test", type=float, metavar="SECONDS", help="start, then quit after SECONDS")
     p.add_argument("--setup", action="store_true", help="download llama.cpp and the language models, then exit")
+    p.add_argument("--onboarding", action="store_true", help="open the setup wizard (also when it was done before)")
     p.add_argument("--models", metavar="IDS", help="with --setup: comma-separated model ids (default: smart + fast)")
     p.add_argument("--voice-test", nargs="+", metavar="WAV", help="run WAV files through the voice pipeline")
     p.add_argument("--speak-out", metavar="WAV", help="with --voice-test: save the spoken replies")
@@ -48,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     from .ui.app import run_tray
 
     return run_tray(home=args.home, autostarted=args.autostart, debug=args.debug,
-                    smoke_test_s=args.smoke_test)
+                    smoke_test_s=args.smoke_test, open_setup=args.onboarding)
 
 
 def run_cli(args: argparse.Namespace) -> int:

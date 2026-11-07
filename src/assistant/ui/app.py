@@ -43,15 +43,18 @@ class TrayApp(QObject):
     _answer = Signal(str, bool)
     _open_chat = Signal()
     _hotkeys_changed = Signal()
+    _setup_event = Signal(object)
 
-    def __init__(self, ctx: AppContext, app: QApplication, *, autostarted: bool = False):
+    def __init__(self, ctx: AppContext, app: QApplication, *, autostarted: bool = False, open_setup: bool = False):
         super().__init__()
         self.ctx = ctx
         self.app = app
         self.autostarted = autostarted
+        self.force_setup = open_setup
         self.tray = TrayController(ctx)
         self.tray.quit_requested.connect(self.quit)
         self.tray.settings_requested.connect(self.open_settings)
+        self.tray.setup_requested.connect(lambda: self.open_setup(first_run=False))
 
         # Pick up manual edits of config.toml (editors save by replacing the file -> re-add the path).
         self.watcher = QFileSystemWatcher([str(ctx.paths.config_file)])
@@ -64,15 +67,20 @@ class TrayApp(QObject):
         self.llm = None
         self.voice: Any = None            # VoiceStack once the voice models are loaded
         self.confirmer: Any = None
+        self.setup_window: Any = None     # the setup wizard while it is open
+        self.downloads: Any = None        # SetupManager (background model downloads)
         self.popup = PopupController(ctx, on_submit=self._submit)
         self.hotkeys = HotkeyManager()
         self.tray.ask_requested.connect(self.ask_dialog)
         self._answer.connect(self._show_answer)
         self._open_chat.connect(self.ask_dialog)
         self._hotkeys_changed.connect(self._register_hotkeys)
+        self._setup_event.connect(self._on_setup_event)
         ctx.bus.subscribe(Topic.STATE_CHANGED, self._on_state_changed)
         ctx.bus.subscribe(Topic.CONFIG_CHANGED, self._on_config_changed)
         ctx.bus.subscribe(Topic.NOTIFY, self._on_notify)
+        for topic in ("setup.job_done", "setup.finished"):
+            ctx.bus.subscribe(topic, self._setup_event.emit)
 
     def _on_state_changed(self, event: Event) -> None:
         """Pause closes the microphone; game mode frees the GPU (model stopped, reloaded afterwards)."""
@@ -103,7 +111,8 @@ class TrayApp(QObject):
             self.ctx.bus.publish(Topic.NOTIFY, title="Settings problem", message=w, level="warning")
         log.info("tray ready (system tray available: %s)", self.tray.available)
         # Heavy init (tool system, model) after the tray is visible; delayed when launched at login.
-        delay = self.ctx.config.data.general.startup_delay_s if self.autostarted else 0.0
+        first_run = not self.ctx.config.data.general.onboarding_done
+        delay = self.ctx.config.data.general.startup_delay_s if self.autostarted and not first_run else 0.0
         QTimer.singleShot(int(delay * 1000), self._init_assistant)
 
     def _init_assistant(self) -> None:
@@ -117,9 +126,114 @@ class TrayApp(QObject):
         self.tools = build_tool_system(self.ctx, confirmer=self.confirmer)
         self.llm = LlmService(self.ctx)
         self.assistant = Assistant(self.ctx, self.tools, self.llm)
+        if not self.ctx.config.data.general.onboarding_done or self.force_setup:
+            log.info("assistant ready; opening the setup wizard")
+            self.open_setup(first_run=not self.ctx.config.data.general.onboarding_done)
+            return
         self.llm.start_background()
         log.info("assistant ready (LLM loading in the background)")
         threading.Thread(target=self._init_voice, name="voice-init", daemon=True).start()
+        self._resume_downloads()
+
+    # ------------------------------------------------------------------ setup wizard + downloads
+    def open_setup(self, first_run: bool = False) -> None:
+        """The setup wizard (first start, or again from the tray menu). Models download meanwhile."""
+        from ..onboarding.downloads import SetupManager
+        from ..onboarding.env import WizardEnv
+        from .onboarding import SetupWindow
+
+        if self.tools is None:
+            self.tray.notify("", "Still starting up - try again in a moment.")
+            return
+        if self.setup_window is not None:
+            self.setup_window.show()
+            return
+        apps = self.tools.services["apps"]
+        env = WizardEnv(ctx=self.ctx, policy=self.tools.policy, routines=self.tools.services["routines"],
+                        app_names=lambda: [a.name for a in apps.apps()], first_run=first_run)
+
+        def warm_up() -> None:      # app list + GPU info are needed a few questions later
+            from ..core import hardware
+
+            try:
+                apps.apps()
+                env.vram_mb = max((g.vram_total_mb for g in hardware.nvidia_gpus()), default=0)
+            except Exception as e:
+                log.debug("setup warm-up: %s", e)
+
+        threading.Thread(target=warm_up, name="setup-warmup", daemon=True).start()
+        if self.downloads is None:
+            self.downloads = SetupManager(self.ctx)
+        self.downloads.start()
+        if self.voice is not None:   # re-run: the wizard uses the microphone itself
+            threading.Thread(target=self._set_voice_paused, args=(True,), name="voice-pause", daemon=True).start()
+        self.setup_window = SetupWindow(self.ctx, env, self.downloads, suspend_hotkeys=self._suspend_hotkeys)
+        self.setup_window.completed.connect(self._setup_done)
+        if not self.setup_window.show():
+            log.error("setup wizard could not be shown; continuing with the current settings")
+            self.setup_window = None
+            self._setup_done()
+
+    def _setup_done(self) -> None:
+        self.setup_window = None
+        self.force_setup = False
+        name = self.ctx.config.data.general.assistant_name
+        if self.voice is None:
+            threading.Thread(target=self._init_voice, name="voice-init", daemon=True).start()
+        elif not self.ctx.state.paused:
+            threading.Thread(target=self._set_voice_paused, args=(False,), name="voice-resume", daemon=True).start()
+        self._maybe_start_llm()
+        self.tray.refresh()
+        self.ctx.bus.publish(Topic.NOTIFY, title=name, message=(
+            f"Bereit - sag „{name}“, wenn du etwas brauchst." if self.ctx.config.data.general.language == "de"
+            else f"Ready - just say “{name}” when you need me."))
+
+    def _suspend_hotkeys(self, on: bool) -> None:
+        """The wizard's hotkey page needs the keys itself while you press the new combination."""
+        if on:
+            self.hotkeys.stop()
+        else:
+            self._register_hotkeys()
+
+    def _resume_downloads(self) -> None:
+        """Downloads interrupted last time (app closed during setup) continue quietly."""
+        from ..onboarding.downloads import SetupManager, human_size
+
+        if self.downloads is None:
+            self.downloads = SetupManager(self.ctx)
+        missing = self.downloads.missing()
+        if missing and self.downloads.start():
+            size = human_size(sum(j.size for j in missing))
+            self.ctx.bus.publish(Topic.NOTIFY, title="Downloads", message=f"Continuing model downloads ({size}).")
+
+    def _llm_installed(self) -> bool:
+        from ..llm.models import CATALOG, is_installed
+        from ..llm.setup import current_server
+
+        if not (self.ctx.config.data.llm.server_path or current_server(self.ctx.paths.bin_dir)):
+            return False
+        return any(is_installed(s, self.ctx.paths.models_dir, vision=False) for s in CATALOG.values() if not s.hidden)
+
+    def _maybe_start_llm(self) -> None:
+        """Load the language model as soon as llama.cpp and a model are on disk (also while the wizard runs)."""
+        if self.llm is None or self.llm.ready or self.ctx.state.game_mode or not self._llm_installed():
+            return
+        if self.llm.server is None:
+            self.llm.spec = None        # pick again: the preferred model may have arrived meanwhile
+        self.llm.start_background()
+
+    def _on_setup_event(self, event: Event) -> None:
+        if event.topic == "setup.job_done" and event.data.get("kind") in ("llm", "llama"):
+            self._maybe_start_llm()
+        elif event.topic == "setup.finished":
+            if self.setup_window is None:
+                self._maybe_start_llm()
+                if self.voice is None and self.ctx.config.data.general.onboarding_done:
+                    threading.Thread(target=self._init_voice, name="voice-init", daemon=True).start()
+            if event.data.get("failed") or event.data.get("error"):
+                self.ctx.bus.publish(Topic.NOTIFY, title="Downloads", level="warning", message=(
+                    event.data.get("error") or "Some downloads failed. They are retried at the next start "
+                    "(or open the setup wizard from the tray menu)."))
 
     # ------------------------------------------------------------------ voice
     def _init_voice(self) -> None:
@@ -289,6 +403,10 @@ class TrayApp(QObject):
     def quit(self) -> None:
         log.info("quit requested")
         self.ctx.bus.publish(Topic.SHUTDOWN)
+        if self.downloads is not None:
+            self.downloads.cancel()
+        if self.setup_window is not None:
+            self.setup_window.voice.close()
         self.hotkeys.stop()
         if self.voice is not None:
             self.voice.pipeline.stop()
@@ -305,7 +423,7 @@ class TrayApp(QObject):
 
 
 def run_tray(*, home: str | None = None, autostarted: bool = False, debug: bool = False,
-             smoke_test_s: float | None = None) -> int:
+             smoke_test_s: float | None = None, open_setup: bool = False) -> int:
     set_app_user_model_id(APP_USER_MODEL_ID)
     ctx = bootstrap("tray", home=home, console_log=debug, console_level="DEBUG" if debug else "INFO")
     qInstallMessageHandler(_qt_message)
@@ -322,7 +440,7 @@ def run_tray(*, home: str | None = None, autostarted: bool = False, debug: bool 
         log.info("another instance is running; %s", "asked it to show settings" if delivered else "it did not answer")
         return 0
 
-    tray_app = TrayApp(ctx, app, autostarted=autostarted)
+    tray_app = TrayApp(ctx, app, autostarted=autostarted, open_setup=open_setup)
     instance.message_received.connect(tray_app.on_message)
     tray_app.start()
 

@@ -23,6 +23,7 @@ ACCENT_DISABLED = 0
 ACCENT_ENABLE_BLURBEHIND = 3
 ACCENT_ENABLE_ACRYLICBLURBEHIND = 4   # Windows 10 1803+ (build 17134)
 
+DWMWA_USE_IMMERSIVE_DARK_MODE = 20
 DWMWA_WINDOW_CORNER_PREFERENCE = 33   # Windows 11
 DWMWCP_DONOTROUND = 1
 
@@ -132,4 +133,19 @@ def disable_system_corners(hwnd: int) -> bool:
         return False
 
 
-__all__ = ["disable_system_corners", "set_acrylic", "set_no_activate", "set_round_region", "windows_build"]
+def set_dark_titlebar(hwnd: int, dark: bool) -> bool:
+    """Dark title bar for normal windows (setup wizard, settings) on Windows 10 2004+ / 11."""
+    if sys.platform != "win32" or not hwnd:
+        return False
+    try:
+        dwmapi = ctypes.WinDLL("dwmapi")  # type: ignore[attr-defined]
+        val = ctypes.c_int(1 if dark else 0)
+        return dwmapi.DwmSetWindowAttribute(ctypes.c_void_p(hwnd), DWMWA_USE_IMMERSIVE_DARK_MODE,
+                                            ctypes.byref(val), ctypes.sizeof(val)) == 0
+    except Exception as e:  # pragma: no cover - Windows only
+        log.debug("dark title bar failed: %s", e)
+        return False
+
+
+__all__ = ["disable_system_corners", "set_acrylic", "set_dark_titlebar", "set_no_activate", "set_round_region",
+           "windows_build"]

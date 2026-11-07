@@ -69,6 +69,11 @@ class Transcriber:
             self._last_use = time.monotonic()
             return s.result.text.strip()
 
+    def unload(self) -> None:
+        with self._lock:
+            self._rec = None
+        gc.collect()
+
     def unload_if_idle(self) -> bool:
         if self._rec is None or self.keep_loaded_s <= 0:
             return False

@@ -75,6 +75,13 @@ class GeneralConfig:
 
 
 @dataclass
+class ProfileConfig:
+    about: str = opt("", pattern=r"(?s)^.{0,400}$",
+                     doc="A few words about you (work, interests) - the assistant keeps them in mind.")
+    location: str = opt("", pattern=r"^.{0,80}$", doc="Where you live (city, country) - for local questions.")
+
+
+@dataclass
 class VoiceConfig:
     wake_word_enabled: bool = opt(True)
     wake_sensitivity: float = opt(0.5, min=0.0, max=1.0, doc="Higher = triggers more easily.")
@@ -187,6 +194,7 @@ class DebugConfig:
 class Config:
     version: int = CONFIG_VERSION
     general: GeneralConfig = field(default_factory=GeneralConfig)
+    profile: ProfileConfig = field(default_factory=ProfileConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
     hotkeys: HotkeyConfig = field(default_factory=HotkeyConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)

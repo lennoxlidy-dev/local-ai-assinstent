@@ -256,3 +256,63 @@ def test_calibration_finds_the_name(voice):
     assert res.ok and res.detected >= 2
     assert any("jarvis" in h.lower() for h in res.heard)
     p["wake"].configure("Jarvis", 0.5, [])
+
+
+# ---------------------------------------------------------------------- setup wizard speech (milestone 5)
+def _setup_voice(voice, clips, until):
+    from assistant.onboarding.voice import SetupVoice
+
+    ctx, p, _ = voice
+    events: list = []
+    done = threading.Event()
+    it = iter(clips)
+
+    def on(kind, data):
+        events.append((kind, data))
+        if kind in until or kind == "error":
+            done.set()
+
+    sv = SetupVoice(ctx, on, source_factory=lambda: ArraySource(next(it), tail_s=2.0), player=NullPlayer())
+    sv._stt = p["stt"]                    # share the loaded model with the other tests
+    return sv, events, done
+
+
+def _close(sv):
+    sv._stt = None                        # don't unload the shared model
+    sv.close()
+
+
+def test_setup_voice_hears_an_answer(voice):
+    _, _, say = voice
+    # (the synthesized voice varies per run; "Lennox" came out as "Linux" half of the time, "Michael" never fails)
+    sv, events, done = _setup_voice(voice, [say("Call me Michael.")], ("heard", "nothing"))
+    sv.ask("", speak=False, listen=True)
+    assert done.wait(60)
+    _close(sv)
+    heard = [d["text"] for k, d in events if k == "heard"]
+    assert heard and "michael" in heard[0].lower(), events
+    assert ("listening", {}) in events
+
+
+def test_setup_voice_calibrates_the_name(voice):
+    _, _, say = voice
+    sv, events, done = _setup_voice(voice, [say("Jarvis.", v) for v in ("M1", "F1", "M2")], ("calibrated",))
+    sv.record_name("Jarvis")
+    assert done.wait(60)
+    _close(sv)
+    result = next(d["result"] for k, d in events if k == "calibrated")
+    assert result["ok"] and result["detected"] >= 2 and result["total"] == 3
+    assert [d["n"] for k, d in events if k == "take"] == [1, 2, 3]
+
+
+def test_setup_voice_enrolls_the_voice_lock(voice):
+    ctx, _, say = voice
+    sentences = ["The quick brown fox jumps over the lazy dog.", "What's the weather like tomorrow?",
+                 "Please open my documents folder and play some music."]
+    sv, events, done = _setup_voice(voice, [say(s, "M1") for s in sentences], ("enrolled",))
+    sv.enroll("en")
+    assert done.wait(60)
+    _close(sv)
+    profile = ctx.paths.config_dir / "voiceprint.npy"
+    assert ("enrolled", {}) in events and profile.exists()
+    profile.unlink()

@@ -100,7 +100,9 @@ class Assistant:
     def profile(self) -> Profile:
         g = self.ctx.config.data.general
         facts = [f.text for f in self.tools.services["memory"].all()]
-        return Profile(g.assistant_name, g.user_name, g.language, g.personality, g.answer_length, facts)
+        pr = self.ctx.config.data.profile
+        return Profile(g.assistant_name, g.user_name, g.language, g.personality, g.answer_length, facts,
+                       about=pr.about, location=pr.location)
 
     def context(self) -> str:
         p = self.tools.platform

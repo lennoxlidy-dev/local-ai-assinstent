@@ -10,15 +10,16 @@ Living status file. Read this first when continuing in a new session (together w
 | 2 | Tools + permission gate + action log, unit tests with mocked destructive actions | ✅ done (146 tests; Windows backends type-checked, not yet run on Windows) |
 | 3 | LLM server management (llama.cpp), tool-calling agent loop, fast-path intents | ✅ done (tested with real llama.cpp + Qwen3.5/Gemma 4 on CPU; GPU latency pending) |
 | 4 | Voice: mic → wake word → VAD → STT → popup, then TTS; WAV test harness | ✅ done (real speech models tested end to end via WAV harness on CPU; mic/popup/hotkeys on Windows pending) |
-| 5 | Onboarding wizard + profile/memory | ⏳ next |
-| 6 | Settings/permissions GUI + history | — |
+| 5 | Onboarding wizard + profile/memory | ✅ done (wizard logic, voice answers and calibration tested with real models; GUI rendered offscreen - Windows run pending) |
+| 6 | Settings/permissions GUI + history | ⏳ next |
 | 7 | Performance tuning, game mode, packaging (install.ps1/.bat/.exe), README | — |
 
 ## Architecture (as built so far)
 
 ```
 src/assistant/
-  __main__.py          entry point: tray (default) | --cli | --setup [--models ids] | --debug | --smoke-test N | --home DIR
+  __main__.py          entry point: tray (default) | --cli | --setup [--models ids] | --onboarding | --debug
+                       | --smoke-test N | --home DIR
                        | --say TEXT --out WAV [--lang --voice] | --voice-test WAV... [--speak-out WAV] [--fast]
   cli.py               text-mode debug CLI (":" commands; free text -> the assistant)
   core/
@@ -44,6 +45,17 @@ src/assistant/
     popup.py           the popup: PopupModel (QML bridge) + PopupController (events -> orb state, fade, mini chat)
     qml/Popup.qml      compact card (orb, live transcript, answer, permission question) / mini chat
     qml/Orb.qml        animated orb: rings with the mic level, spin while thinking, pulse while speaking
+    onboarding.py      setup wizard window: SetupModel (QML bridge) + SetupWindow (voice events, downloads, pages)
+    qml/Setup.qml      wizard shell (header, progress, page loader, downloads, buttons); qml/setup/*.qml pages
+    qtmodel.py         helper: QObject view-models with notifying properties for QML
+  onboarding/
+    questions.py       the 27 setup questions (EN/DE text, defaults, options, validation, apply -> config/policy/db)
+    interpret.py       typed/spoken answers: names, choices (labels, synonyms, ordinals), yes/no, numbers, nav words
+    wizard.py          state machine: one question at a time, back/skip, conditions, answers applied immediately
+    voice.py           speaks questions, listens for answers, records the name 3x / voice-lock sentences, mic meter
+    downloads.py       SetupManager: background downloads (speech models -> llama.cpp -> LLM), retry, disk check
+    text.py            the same wizard as text (debug CLI :setup)
+    env.py             what the wizard needs from the app (+ Windows display name / UI language guesses)
   permissions/
     policy.py          capabilities (allow/ask/block), risks, folder rules, permissions.toml
     pathrules.py       Windows path canonicalization (ntpath; junction/8.3/ADS/device-path proof) + rule matching
@@ -97,7 +109,7 @@ src/assistant/
                        send2trash IFileOperation, Everything SDK, SHGetKnownFolderPath)
     inputs.py          SendInput (fixed-width ctypes structs, unit-tested layout)
     com.py             per-thread COM init; WinRT worker thread (MTA + asyncio)
-tests/                 pytest (292 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
+tests/                 pytest (339 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
                        the real speech models - each skipped when not installed)
 bench/                 llm_bench.py + cases.py: GPU latency + tool-calling accuracy per model
 scripts/               dev-setup.ps1, setup-models.bat, run-tray.bat, run-debug.bat, run-cli.bat
@@ -289,6 +301,55 @@ Voice measurements (this Linux container: 4 vCPU Xeon, CPU only - please re-chec
 | Reply -> first spoken audio | ~550 ms (synthesis of the first sentence) | |
 | RAM while speech models are loaded | ~1.1 GB (back to ~200 MB after 10 idle minutes) | |
 
+Milestone 5 decisions:
+
+- **27 questions** (spec: >= 15), one per page, in this order: language, assistant name, say the name 3x
+  (wake-word calibration), what to call you, about you + where you live (optional), voice replies, voice (with
+  ▶ preview), personality, answer length, microphone + level meter, music app, browser, everyday apps (mail,
+  notes, code, chat, calls -> spoken aliases), folders, capability permissions (Allow/Ask/Block per capability),
+  actions that always need confirmation, separate "Assistant" desktop, per-app desktop rules, autostart, hotkeys
+  (push-to-talk, panic, press/hold), silence timeout, game mode, speed vs smart model, save conversations,
+  retention, voice lock (read 3 sentences), routines (templates: gaming mode, work mode, music time, good night).
+  Questions that don't apply are hidden (no voice question when voice replies are off, no retention when
+  conversations aren't saved, no desktop rules without the separate desktop).
+- **Every question has a default and can be skipped** - skipping *applies the shown suggestion* (e.g.
+  autostart on, the detected music app), so what you saw is what you get. Defaults come from your PC where
+  possible: Windows display language, your first name from the Windows account, installed music apps/browsers,
+  GPU VRAM. Answers are written immediately (a language change switches the next question; nothing is lost if
+  the window closes). Closing early asks "use the suggestions for the rest?". Re-run: tray menu
+  **Setup wizard…** (or `--onboarding`); it then starts from your current settings. The settings window (M6)
+  will edit every answer individually.
+- **Speaking and listening**: each question is spoken (when the speech model is downloaded and voice replies
+  are on - "Read questions aloud" toggle). With "Answer by voice" it then listens (VAD, up to 8 s) and
+  interprets the answer: names ("call me Lennox" -> Lennox, "ich heiße Anna-Lena"), choices by label in either
+  language, synonyms or position ("the second one", "die erste"), yes/no (same conservative parser as
+  confirmations), numbers ("eineinhalb Sekunden", "1,5", "one and a half"), several options ("all", "keine"),
+  and navigation words (skip/weiter, back/zurück, repeat/nochmal). It says "Okay." and moves on, shows what it
+  heard, and after two misunderstandings stops listening until you act (no endless loops). Typing and clicking
+  always work too.
+- **Wake-word calibration in the wizard**: beep, record 2.5 s, three times; the calibration picks the lowest
+  sensitivity that still detects your takes and learns how you pronounce the name (e.g. "Javis"), then reports
+  "Recognized 3 of 3" (+ "try again" / pick another name if it went badly).
+- **Downloads during the wizard**: speech models first (wake word 18 MB, VAD, speech output 129 MB, speech
+  recognition 487 MB, voice lock 30 MB) so the wizard can speak and listen within a minute or two, then
+  llama.cpp, then the language model for the chosen profile (auto -> its pick first, then the other one for the
+  benchmark; smart/fast -> just that one). The plan is recomputed before every file, so changing "speed vs smart"
+  mid-way changes what is downloaded next. Retries with backoff (10/30/90 s), disk-space check, progress + ETA in
+  the wizard's footer; the language model starts loading as soon as it is on disk. Interrupted downloads resume
+  at the next start. `ASSISTANT_NO_DOWNLOADS=1` turns this off (tests, offline PCs).
+- **No wake listening during setup**: the always-on pipeline starts only when the wizard is finished (with the
+  calibrated name), so the spoken questions can't trigger it; on a re-run it is paused meanwhile. Global hotkeys
+  are paused while you record new ones.
+- **Profile in the prompt**: name, language, personality, answer length, plus `profile.about` and
+  `profile.location`; remembered facts newest first within a fixed budget (~1500 characters / 25 facts) so the
+  system prompt stays short and cached - older facts are reachable with the `recall` tool.
+- **Memory**: "what do you know about me / was weißt du über mich" lists facts (fast path, spoken as "You told
+  me 3 things: …"); "forget that … / vergiss, dass …" deletes the clearly best match (asks which one if
+  several match equally); near-identical facts are merged instead of duplicated; a correction is remembered as a
+  new fact and the model is told to forget the old one first.
+- **GUI tech**: the wizard is a normal window (QML + Qt Quick Controls "Basic" style, software renderer like
+  the popup, dark title bar via DWM). It is loaded on demand and freed when it closes.
+
 ## How to test
 
 ### Automated (any OS)
@@ -417,6 +478,28 @@ Permissions file: `%APPDATA%\Assistant\permissions.toml` (editable; invalid entr
    video/podcast plays, how the popup looks (blur, corners, position), whether focus was ever stolen, and the
    TIMING lines from `%LOCALAPPDATA%\Assistant\logs\assistant-debug.log`.
 
+### Milestone 5 on Windows (setup wizard, profile, memory)
+
+1. Fresh start: quit the assistant, rename `%APPDATA%\Assistant\config.toml` to `config.old.toml` (the models in
+   `%LOCALAPPDATA%` stay), then `scripts\run-debug.bat`. The wizard opens; downloads run in its footer (with the
+   models already there it says "All models are installed"). To test the downloads themselves, also rename
+   `%LOCALAPPDATA%\Assistant\models\voice` - the speech models (~0.7 GB) come back while you answer.
+2. Go through it by voice: switch on "Answer by voice", then answer naturally - "German", "call yourself Nova",
+   say the name 3x after the beeps, "call me …", "skip", "the second one", "one and a half seconds", "back",
+   "repeat". Also try typing/clicking, ▶ voice previews, the mic level meter (and switching microphones), adding
+   a trusted folder, changing a permission, recording a new hotkey (click "Change", press the keys), the voice
+   lock (read 3 sentences), and a routine template.
+3. Close the window half-way -> "use the suggestions for the rest?" -> yes. Then tray menu -> **Setup wizard…**
+   runs it again with your current settings as defaults.
+4. After finishing: "Ready - just say Nova…" notification; the wake word uses the calibrated sensitivity
+   (`:config voice` in the CLI shows `wake_sensitivity` / `wake_variants`); routines exist ("Nova, gaming mode").
+5. Memory: "Nova, remember that my sister's name is Lea" -> "Nova, what do you know about me?" ->
+   "Nova, forget that my sister's name is Lea". Ask the LLM something personal ("what's my sister called?").
+   With the profile ("about you") filled in, ask "what should I cook tonight?" - it should take it into account.
+6. Text version (no GUI): `scripts\run-cli.bat` -> `:setup` (Enter keeps a suggestion, `back`, `quit`).
+7. Please report: which spoken answers it misunderstood (the "I heard: …" line shows the transcript), anything
+   that looks off in the wizard, and whether the downloads/ETA behaved.
+
 ## Benchmark results (tool-calling accuracy, measured here on CPU - latency must be re-measured on the GPU)
 
 24 realistic EN/DE cases on a simulated PC (real agent loop, tool registry and permission gate; fake OS
@@ -460,4 +543,10 @@ action that no tool performed) and a fast-path "remember/merk dir" intent. Laten
   cancellation: with loud speakers its own voice can reach the mic (mitigated: barge-in needs the name, and the
   name inside its own speech is ignored) - headphones avoid it. Calibration/enrollment are CLI commands until the
   onboarding wizard (M5) and settings window (M6).
-- Next: M5 - onboarding wizard (>= 15 questions, say the name 3x to calibrate) + profile/memory.
+- M5 open points: the wizard GUI was rendered and clicked through offscreen here (all 27 pages, EN/DE, dark/light,
+  no QML warnings) and its voice flow was tested with the real models, but it has not run on Windows yet (focus
+  handling, dark title bar, file dialog, hotkey capture). German tool/capability titles exist only in the
+  wizard so far; permission questions in the popup still show the English summaries. Unusual names can be
+  misheard when answered by voice (in tests "Lennox" was transcribed as "Linux" half of the time) - the wizard
+  shows "I heard: …", so such a name is best typed.
+- Next: M6 - settings window (10 tabs, every wizard answer editable), permissions GUI, conversation history.

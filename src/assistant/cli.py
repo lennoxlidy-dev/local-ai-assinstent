@@ -497,6 +497,18 @@ class DebugCLI:
             else:
                 raise ValueError("usage: :voice status|on|off|devices|say <text>")
 
+        @self.command("setup", "the setup wizard as text (Enter = keep the suggestion, back, quit)")
+        def _setup(args: list[str]) -> None:
+            from .onboarding.env import WizardEnv
+            from .onboarding.text import run_text_wizard
+            from .onboarding.wizard import Wizard
+
+            apps = self.tools.services["apps"]
+            env = WizardEnv(ctx=ctx, policy=self.tools.policy, routines=self.tools.services["routines"],
+                            app_names=lambda: [a.name for a in apps.apps()],
+                            first_run=not ctx.config.data.general.onboarding_done)
+            run_text_wizard(Wizard(env), self.read_line, self.print)
+
         @self.command("calibrate", "say the name 3 times to tune the wake word for your voice")
         def _calibrate(args: list[str]) -> None:
             from .voice.calibration import calibrate_wake_word

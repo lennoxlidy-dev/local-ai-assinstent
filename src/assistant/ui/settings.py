@@ -151,7 +151,6 @@ class SettingsWindow(QObject):
             engine.deleteLater()
             return False
         self.engine, self.window = engine, roots[0]
-        self.window.closing.connect(self._on_closing)
         try:
             from ..win.dwm import set_dark_titlebar
 
@@ -162,9 +161,6 @@ class SettingsWindow(QObject):
         self.window.raise_()
         self.window.requestActivate()
         return True
-
-    def _on_closing(self, *_: Any) -> None:
-        QTimer.singleShot(0, self.close)
 
     def close(self) -> None:
         """Free everything: the QML engine, the tab data, borrowed audio."""
@@ -920,6 +916,12 @@ class SettingsWindow(QObject):
 
         threading.Thread(target=go, name="llm-restart", daemon=True).start()
         self._status(self.t("restart_model") + " …", "info")
+        return {"ok": True}
+
+    def do_windowClosed(self) -> dict[str, Any]:  # noqa: N802 - X button / Esc (QML onClosing)
+        # (not window.closing.connect(...): PySide6 can't hand QQuickCloseEvent to Python, so such a slot
+        # never ran and the window was only hidden - with the wake word possibly still paused)
+        QTimer.singleShot(0, self.close)         # not inside the window's own close handler
         return {"ok": True}
 
     def do_downloadModels(self) -> dict[str, Any]:  # noqa: N802

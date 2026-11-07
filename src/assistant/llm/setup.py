@@ -9,6 +9,11 @@ Release layout (checked against llama.cpp's release workflow, Nov 2026):
 CUDA 13.x needs an NVIDIA driver >= 580; otherwise we take the 12.4 build.
 Each version is extracted into its own folder and ``current.json`` is switched
 atomically afterwards, so a failed update never breaks the working install.
+
+Which release: llama.cpp publishes every build ("b12110") as a *pre-release* with the binaries.
+Since late 2026 its versioned releases ("v0.9.0") - which GitHub calls "latest" - carry no
+binaries, only ``nightly-tag.txt`` naming the build they correspond to. ``fetch_release`` follows
+that pointer, and otherwise takes the newest release that has Windows builds.
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ import shutil
 import sys
 import urllib.request
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,7 +37,8 @@ from .models import ModelSpec, model_files
 
 log = logging.getLogger(__name__)
 
-RELEASE_API = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
+API = "https://api.github.com/repos/ggml-org/llama.cpp"
+RELEASE_API = f"{API}/releases/latest"
 EXE = "llama-server.exe" if sys.platform == "win32" else "llama-server"
 
 
@@ -86,11 +93,45 @@ def select_assets(release: dict[str, Any], *, backend: str = "auto", driver: str
     raise RuntimeError("no suitable llama.cpp Windows build in the latest release")
 
 
-def fetch_release(timeout: float = 20) -> dict[str, Any]:
-    req = urllib.request.Request(RELEASE_API, headers={"User-Agent": USER_AGENT,
-                                                        "Accept": "application/vnd.github+json"})
+def _get_json(url: str, timeout: float = 20) -> Any:
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.load(resp)
+
+
+def _get_text(url: str, timeout: float = 20) -> str:
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read(4096).decode("utf-8", "replace")
+
+
+def has_windows_build(release: dict[str, Any], arch: str = "x64") -> bool:
+    pat = re.compile(rf"^llama-[\w.-]+-bin-win-[\w.-]+-{arch}\.zip$")
+    return any(pat.match(str(a.get("name", ""))) for a in release.get("assets", []))
+
+
+def fetch_release(get_json: Callable[[str], Any] = _get_json,
+                  get_text: Callable[[str], str] = _get_text) -> dict[str, Any]:
+    """The llama.cpp release to install (see the module docstring)."""
+    latest = get_json(RELEASE_API)
+    if has_windows_build(latest):
+        return latest
+    note = next((a for a in latest.get("assets", []) if a.get("name") == "nightly-tag.txt"), None)
+    if note is not None:
+        try:
+            tag = get_text(note["browser_download_url"]).strip()
+            if re.fullmatch(r"[\w.-]+", tag):
+                release = get_json(f"{API}/releases/tags/{tag}")
+                if has_windows_build(release):
+                    log.info("llama.cpp %s = build %s", latest.get("tag_name"), tag)
+                    return release
+        except (OSError, ValueError, KeyError) as e:      # (network errors are OSErrors)
+            log.warning("llama.cpp: could not follow the build of %s: %s", latest.get("tag_name"), e)
+    for release in get_json(f"{API}/releases?per_page=30"):   # newest first, pre-releases included
+        if not release.get("draft") and has_windows_build(release):
+            log.info("llama.cpp: using the newest build with Windows binaries, %s", release.get("tag_name"))
+            return release
+    raise RuntimeError("no llama.cpp release with Windows builds found")
 
 
 def current_server(bin_dir: Path) -> Path | None:

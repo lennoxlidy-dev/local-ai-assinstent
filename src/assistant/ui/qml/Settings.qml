@@ -40,6 +40,7 @@ ApplicationWindow {
     palette.light: th.card2
     palette.midlight: th.card2
 
+    onClosing: settings.call("windowClosed", {})       // free the window, resume what it paused
     Shortcut { sequence: "Esc"; onActivated: win.close() }
     Shortcut { sequence: "Ctrl+Tab"; onActivated: settings.call("tab", {name: win.tabs[(win.tabs.indexOf(settings.tab) + 1) % win.tabs.length]}) }
 

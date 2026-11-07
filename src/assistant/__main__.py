@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from collections.abc import Callable
 
@@ -157,6 +158,7 @@ def run_setup(args: argparse.Namespace) -> int:
                 print()
             except (DownloadError, OSError, RuntimeError, KeyError) as e:
                 print(f"\n  FAILED: {e}")
+                logging.getLogger("assistant.setup").warning("download of %s failed: %s", title, e)
                 failed.append(title)
                 changed = changed or isinstance(e, ServerFileChanged)
     except (KeyboardInterrupt, Cancelled):

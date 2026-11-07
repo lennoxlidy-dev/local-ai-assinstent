@@ -113,8 +113,10 @@ class SelfTest(QObject):
                 win.model.call("tab", {"name": tab})
                 yield 400
             self._step(f"all {len(TABS)} settings tabs load", len(self.problems) == before)
-            win.close()
+            if win.window is not None:
+                win.window.close()             # like the X button: must free it and resume what it paused
             yield 600
+            self._step("settings window closes", self.tray.settings_window is None)
 
         self.tray.popup.open_chat()
         yield 800

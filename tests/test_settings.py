@@ -274,3 +274,21 @@ def test_recordings_saved_only_when_enabled_and_purged(tmp_path):
     old = time.time() - 40 * 86400
     os.utime(path, (old, old))
     assert recordings.purge(ctx, 30) == 1 and not path.exists()
+
+
+def test_closing_the_window_frees_it(sw):
+    """The window's own close (X button, Esc) must run the cleanup - not just hide the window."""
+    from PySide6.QtCore import QCoreApplication
+
+    w, *_ = sw
+    closed = []
+    w.closed.connect(lambda: closed.append(1))
+    paused = []
+    w.d.pause_voice = lambda on: paused.append(on)
+    assert w.show()
+    w._voice_paused = True                 # e.g. the Voice tab's level meter had paused the wake word
+    w.window.close()                       # what the title bar's X does
+    for _ in range(5):
+        QCoreApplication.processEvents()
+    assert w.window is None and w.engine is None and closed == [1]
+    assert paused == [False]               # the wake word listens again

@@ -119,7 +119,7 @@ src/assistant/
                        send2trash IFileOperation, Everything SDK, SHGetKnownFolderPath)
     inputs.py          SendInput (fixed-width ctypes structs, unit-tested layout)
     com.py             per-thread COM init; WinRT worker thread (MTA + asyncio)
-tests/                 pytest (375 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
+tests/                 pytest (379 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
                        the real speech models - each skipped when not installed)
 bench/                 llm_bench.py + cases.py: GPU latency + tool-calling accuracy per model;
                        perf_bench.py: every performance target of the spec (idle, wake, STT, TTS, fast path, LLM)
@@ -462,7 +462,7 @@ Benchmark results here (4-core Xeon VM, CPU only, `bench/perf_bench.py`):
 | Speech recognition model load (only after idle unload) | 5.1 s, in parallel with your speech | |
 | Answer → first spoken audio | 462 ms | |
 
-Fixes after Milestone 7 (version 0.1.1):
+Fixes after Milestone 7 (version 0.1.1, from the first install on Windows):
 
 - **Speech recognition download failed every time**: the Parakeet archive on the k2-fsa/sherpa-onnx release was
   re-exported upstream on 2026-11-07 (487,211,443 bytes instead of 487,170,055; new encoder/decoder/joiner files).
@@ -478,6 +478,21 @@ Fixes after Milestone 7 (version 0.1.1):
 - `--setup` (install.bat step 4) continues after a failed item and lists what is missing at the end, instead of
   stopping at the first failure. Long download messages wrap in the wizard and settings.
 - pypdfium2 5.15.0 was yanked upstream ("important correction" in 5.15.1) → 5.15.1 (PDF extraction re-checked).
+
+Fixes in version 0.1.2 (from the first real Windows run):
+
+- **llama.cpp download failed** ("no suitable llama.cpp Windows build in the latest release"): llama.cpp now
+  publishes every build (b12110 …) as a *pre-release*, and its versioned releases - which GitHub's "latest" endpoint
+  returns (v0.9.0) - contain no binaries, only `nightly-tag.txt` naming their build. `fetch_release` follows that
+  pointer (v0.9.0 → b12110) and otherwise takes the newest non-draft release that has Windows builds (also covers a
+  build whose files are still uploading). Checked against the real files: b12110 has the Windows CUDA 12.4 (+ runtime),
+  Vulkan and CPU builds but no CUDA 13.5 build, so the CUDA 12.4 build is chosen (it runs on newer drivers too).
+- **Closing the settings window with X/Esc** raised `TypeError: Cannot call meta function "void
+  _on_closing(QQuickCloseEvent*)"`: PySide6 can't hand `QQuickCloseEvent` to a Python slot, so the cleanup never ran -
+  the window was only hidden, and a wake word paused by the Voice tab could stay paused. Now QML's `onClosing` calls
+  `settings.call("windowClosed")`. The tests and `--self-test` close it the way the X button does (they called the
+  Python close before, which is why this wasn't caught).
+- `--setup` also writes failed downloads to `cli.log` (they were only printed).
 
 ## How to test
 

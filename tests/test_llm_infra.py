@@ -17,7 +17,7 @@ from assistant.core.cancel import CancelToken, Cancelled
 from assistant.llm.download import DownloadError, ServerFileChanged, download
 from assistant.llm.models import CATALOG, REVISIONS, choose_model, is_installed, model_files
 from assistant.llm.server import LlamaServer, ServerError, ServerOptions, ServerState, build_args
-from assistant.llm.setup import current_server, install_llama, select_assets
+from assistant.llm.setup import current_server, fetch_release, install_llama, select_assets
 
 DATA = os.urandom(3 * 2**20 + 123)
 
@@ -141,6 +141,60 @@ def test_select_assets():
     assert select_assets(RELEASE, driver="552.22")[0] == "cuda-12.4"     # older driver: CUDA 12
     assert select_assets(RELEASE, driver=None)[0] == "vulkan"             # no NVIDIA GPU
     assert select_assets(RELEASE, backend="cpu", driver="581")[0] == "cpu"
+
+
+VERSIONED = {"tag_name": "v0.9.0", "prerelease": False,          # llama.cpp's "latest" since late 2026
+             "assets": [{"name": "nightly-tag.txt", "browser_download_url": "https://dl/v0.9.0/nightly-tag.txt"}]}
+
+
+def _github(latest, tags=None, listing=(), texts=None):
+    calls = []
+
+    def get_json(url):
+        calls.append(url)
+        if url.endswith("/releases/latest"):
+            return latest
+        if "/releases/tags/" in url:
+            return (tags or {})[url.rsplit("/", 1)[1]]
+        if "/releases?per_page=" in url:
+            return list(listing)
+        raise AssertionError(url)
+
+    def get_text(url):
+        calls.append(url)
+        return (texts or {})[url]
+
+    return get_json, get_text, calls
+
+
+def test_fetch_release_follows_the_versioned_release_to_its_build():
+    build = dict(RELEASE, tag_name="b12110", prerelease=True)
+    gj, gt, calls = _github(VERSIONED, tags={"b12110": build}, texts={"https://dl/v0.9.0/nightly-tag.txt": "b12110\n"})
+    rel = fetch_release(gj, gt)
+    assert rel["tag_name"] == "b12110" and select_assets(rel, driver="581.42")[0] == "cuda-13.5"
+    assert not any("per_page" in c for c in calls)
+
+
+def test_fetch_release_falls_back_to_the_newest_windows_build():
+    uploading = {"tag_name": "b12191", "prerelease": True, "assets": [{"name": "llama-b12191-bin-macos-arm64.tar.gz"}]}
+    draft = dict(RELEASE, tag_name="b12192", draft=True)
+    build = dict(RELEASE, tag_name="b12190", prerelease=True)
+    gj, gt, _ = _github({"tag_name": "v0.9.0", "assets": []}, listing=[draft, uploading, build])
+    assert fetch_release(gj, gt)["tag_name"] == "b12190"
+
+    def offline(url):
+        raise OSError("timed out")
+
+    gj, _, _ = _github(VERSIONED, listing=[build])
+    assert fetch_release(gj, offline)["tag_name"] == "b12190"      # pointer unreadable -> fallback
+    gj, gt, _ = _github({"tag_name": "v0.9.0", "assets": []}, listing=[uploading])
+    with pytest.raises(RuntimeError, match="no llama.cpp release"):
+        fetch_release(gj, gt)
+
+
+def test_fetch_release_takes_latest_when_it_has_builds():
+    gj, gt, calls = _github(RELEASE)
+    assert fetch_release(gj, gt) is RELEASE and len(calls) == 1
 
 
 def test_install_llama_from_zips(tmp_path, monkeypatch):

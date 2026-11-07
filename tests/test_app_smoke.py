@@ -77,6 +77,6 @@ def test_self_test_opens_every_window(tmp_path):
                          capture_output=True, text=True, timeout=200)
     assert res.returncode == 0, res.stdout + res.stderr
     assert "self-test passed" in res.stdout
-    assert "all 10 settings tabs load" in res.stdout
+    assert "all 10 settings tabs load" in res.stdout and "ok    settings window closes" in res.stdout
     assert list(tmp_path.glob("assistant-selftest-*")) == []          # cleaned up
     assert not (tmp_path / "unused").exists()

@@ -115,6 +115,9 @@ class Task:
     #: From then on every side-effecting action needs a fresh confirmation (prompt-injection defense).
     tainted: bool = False
     taint_source: str = ""
+    #: speak text right away (voice requests: the same sentence stream the LLM's answer uses); routines'
+    #: "say" steps use it so an announcement comes when its step is reached, not after the whole routine
+    say: Callable[[str], None] | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass

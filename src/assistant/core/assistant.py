@@ -63,7 +63,7 @@ class Assistant:
         self.llm = llm
         self.conversations = ConversationStore(tools.db)
         self.fastpath = FastPath(self._resolve_app, lambda: [ctx.config.data.general.assistant_name],
-                                 lambda: ctx.config.data.general.language)
+                                 lambda: ctx.config.data.general.language, routines=self._routine_names)
         self.agent = Agent(llm, tools, bus=ctx.bus, max_steps=ctx.config.data.llm.max_agent_steps) if llm else None
         self._lock = threading.Lock()
         self._current: Task | None = None
@@ -92,6 +92,14 @@ class Assistant:
     @property
     def lang(self) -> str:
         return self.ctx.config.data.general.language
+
+    def _routine_names(self) -> list[str]:
+        store = self.tools.services.get("routines")
+        try:
+            return [r.name for r in store.all()] if store is not None else []
+        except Exception:
+            log.exception("could not read the routines")
+            return []
 
     def _resolve_app(self, name: str) -> str | None:
         try:
@@ -171,6 +179,10 @@ class Assistant:
             self.tools.platform.input.release_all()
         except Exception:
             pass
+        try:
+            self.tools.platform.sound.stop_all()     # a routine's sound, even after the routine has finished
+        except Exception:
+            pass
         if task is None:
             return False
         log.info("cancelling task %s (%s)", task.id, reason)
@@ -192,6 +204,8 @@ class Assistant:
         if not self._lock.acquire(blocking=False):
             return Reply(self._t("busy"), ok=False, via="error")
         task = Task(source="fast" if fi is not None else "llm", cancel=self.root_cancel.child())
+        if fi is not None:
+            task.say = on_content       # routines' "say" steps are spoken as they come (voice requests)
         task.cancel.on_cancel(lambda: self._safe_release())
         self._current = task
         try:

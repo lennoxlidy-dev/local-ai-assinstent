@@ -101,7 +101,8 @@ def test_walk_through_with_typed_answers(env):
     gaming["enabled"] = True
     w.answer(items)
     r = env.routines.get("Gaming mode")
-    assert r is not None and r.steps[0] == {"tool": "open_app", "args": {"name": "Steam"}}
+    assert r is not None and r.steps[0] == {"tool": "say", "args": {"text": "Gaming mode activated. Have fun!"}}
+    assert r.steps[1] == {"tool": "open_app", "args": {"name": "Steam"}}
     assert w.at_end
     w.finish()
     assert cfg.data.general.onboarding_done is True
@@ -202,7 +203,10 @@ def test_routine_template_steps():
     steps = routine_steps({"key": "night", "apps": "", "volume": None})
     assert steps == [{"tool": "media", "args": {"action": "pause"}}, {"tool": "power", "args": {"action": "lock"}}]
     steps = routine_steps({"key": "gaming", "apps": "Steam, Discord", "volume": "40"})
-    assert [s["tool"] for s in steps] == ["open_app", "open_app", "volume"] and steps[2]["args"]["level"] == 40
+    assert [s["tool"] for s in steps] == ["say", "open_app", "open_app", "volume"] and steps[3]["args"]["level"] == 40
+    assert steps[0]["args"]["text"] == "Gaming mode activated. Have fun!"
+    de = routine_steps({"key": "gaming", "apps": "Steam", "volume": None}, "de")
+    assert de[0] == {"tool": "say", "args": {"text": "Spielmodus aktiviert. Viel Spaß!"}}
 
 
 def test_text_wizard(env):

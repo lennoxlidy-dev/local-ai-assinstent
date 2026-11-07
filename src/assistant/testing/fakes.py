@@ -132,6 +132,18 @@ class FakeMedia:
         return self.playing
 
 
+class FakeSound:
+    def __init__(self) -> None:
+        self.played: list[tuple[str, bool]] = []
+        self.stopped = 0
+
+    def play(self, path: str, wait: bool, cancelled=None) -> None:  # type: ignore[no-untyped-def]
+        self.played.append((path, wait))
+
+    def stop_all(self) -> None:
+        self.stopped += 1
+
+
 class FakeAudio:
     def __init__(self) -> None:
         self.volume, self.muted = 50, False
@@ -290,7 +302,7 @@ def fake_platform(home: Path) -> Platform:
     windows, desktops = FakeWindows(), FakeDesktops()
     p = Platform(
         apps=FakeApps(windows, desktops), windows=windows, desktops=desktops, media=FakeMedia(),
-        audio=FakeAudio(), display=FakeDisplay(), clipboard=FakeClipboard(), power=FakePower(),
+        audio=FakeAudio(), sound=FakeSound(), display=FakeDisplay(), clipboard=FakeClipboard(), power=FakePower(),
         input=FakeInput(), screen=FakeScreen(), uia=FakeUia(), shell=FakeShell(),
         trash=FakeTrash(home / ".trash"), search=FakeSearch(), name="fake",
     )

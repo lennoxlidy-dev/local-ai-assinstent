@@ -27,7 +27,7 @@ from ..core.context import AppContext
 from ..core.events import Event, Topic
 from ..permissions.policy import CAPABILITIES, LOCKED_RISKS, RISK_TITLES, Access, Level, Risk
 from .qtmodel import model_class
-from .settings_text import strings, text
+from .settings_text import strings, text, tool_label
 from .theme import Look, is_dark
 
 log = logging.getLogger(__name__)
@@ -54,6 +54,7 @@ class SettingsDeps:
     suspend_hotkeys: Callable[[bool], None] = lambda on: None
     save_dialog: Callable[[str, str, str], str] | None = None   # (title, file name, filter) -> path
     folder_dialog: Callable[[], str] | None = None
+    file_dialog: Callable[[str, str], str] | None = None        # (title, filter) -> path of an existing file
     open_path: Callable[[Path], None] | None = None
 
 
@@ -62,7 +63,7 @@ SettingsModelBase: Any = model_class("SettingsModelBase", {
     "cfg": ("QVariantMap", {}), "status": (str, ""), "statusKind": (str, "info"), "statusSeq": (int, 0),
     "caps": ("QVariantList", []), "risks": ("QVariantList", []), "folders": ("QVariantList", []),
     "accessOptions": ("QVariantList", []), "apps": ("QVariantList", []), "aliases": ("QVariantList", []),
-    "desktopRules": ("QVariantList", []), "routines": ("QVariantList", []), "toolNames": ("QVariantList", []),
+    "desktopRules": ("QVariantList", []), "routines": ("QVariantList", []), "toolOptions": ("QVariantList", []),
     "facts": ("QVariantList", []), "conversations": ("QVariantList", []), "conversation": ("QVariantMap", {}),
     "actions": ("QVariantList", []), "devicesIn": ("QVariantList", []), "devicesOut": ("QVariantList", []),
     "level": (float, 0.0), "calib": ("QVariantMap", {}), "enroll": ("QVariantMap", {}),
@@ -265,18 +266,24 @@ class SettingsWindow(QObject):
         from ..tools.routines import NOT_IN_ROUTINES
 
         store = self.d.tools.services["routines"]
+        first = ["say", "play_sound", "wait", "open_app", "volume", "media", "play_music", "desktop"]
+        names = first + sorted(n for n in self.d.tools.registry.names() if n not in NOT_IN_ROUTINES and n not in first)
+        lang = self._lang()
         self.model.set(routines=[{"name": r.name, "description": r.description,
                                   "steps": [{"tool": s["tool"], "args": json.dumps(s.get("args", {}), ensure_ascii=False)}
                                             for s in r.steps], "summary": self._steps_summary(r.steps)}
                                  for r in store.all()],
-                       toolNames=["wait", "say"] + [n for n in self.d.tools.registry.names() if n not in NOT_IN_ROUTINES])
+                       toolOptions=[{"value": n, "label": tool_label(n, lang)} for n in names])
 
     @staticmethod
     def _steps_summary(steps: list[dict[str, Any]]) -> str:
         parts = []
         for s in steps[:6]:
             a = s.get("args", {})
-            detail = next((str(a[k]) for k in ("name", "level", "action", "query", "text", "seconds") if k in a), "")
+            if "path" in a:
+                detail = str(a["path"]).replace("\\", "/").rsplit("/", 1)[-1]
+            else:
+                detail = next((str(a[k]) for k in ("name", "level", "action", "query", "text", "seconds") if k in a), "")
             parts.append(f"{s['tool']} {detail}".strip())
         return " · ".join(parts) + (" …" if len(steps) > 6 else "")
 
@@ -633,14 +640,33 @@ class SettingsWindow(QObject):
         tpl = next(t for t in ROUTINE_TEMPLATES if t["key"] == key)
         env = WizardEnv(ctx=self.ctx, app_names=self._app_names)
         apps = _installed(env, tpl["apps"]) or tpl["apps"]
-        steps = routine_steps({"key": key, "apps": ", ".join(apps), "volume": tpl["volume"]})
+        steps = routine_steps({"key": key, "apps": ", ".join(apps), "volume": tpl["volume"]}, self._lang())
         return self.do_saveRoutine(tpl["name"][self._lang()], steps, "")
 
+    def do_pickSound(self) -> dict[str, Any]:  # noqa: N802
+        title, filt = self.t("choose_sound"), "Sounds (*.mp3 *.wav *.wma *.m4a *.aac)"
+        if self.d.file_dialog is not None:
+            path = self.d.file_dialog(title, filt)
+        else:
+            from PySide6.QtWidgets import QFileDialog
+
+            path, _ = QFileDialog.getOpenFileName(None, title, str(Path.home() / "Music"), filt)
+            path = path.replace("/", "\\") if path and re.match(r"^[A-Za-z]:/", path) else path
+        return {"ok": True, "path": path or ""}
+
     def do_runRoutine(self, name: str) -> dict[str, Any]:  # noqa: N802
+        from ..core.cancel import CancelToken
         from ..permissions.gate import Task
 
+        def speak(text: str) -> None:            # "say" steps out loud, like when you ask by voice
+            stack, v = self.d.voice(), self.ctx.config.data.voice
+            if stack is not None and v.tts_enabled and text.strip():
+                lang = self._lang()
+                stack.speaker.say(text.strip(), lang, v.tts_voice_de if lang == "de" else v.tts_voice_en,
+                                  v.tts_speed, CancelToken())
+
         def run() -> None:
-            res = self.d.tools.invoke("run_routine", {"name": name}, Task(source="user"))
+            res = self.d.tools.invoke("run_routine", {"name": name}, Task(source="user", say=speak))
             self.ctx.bus.publish(Topic.NOTIFY, title=name, message=res.text.splitlines()[0] if res.text else "",
                                  level="info" if res.ok else "warning")
 

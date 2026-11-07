@@ -3,9 +3,11 @@ import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import "../common"
 
-// Left: the routines. Right: the editor (name, description, steps as action + JSON details).
+// Left: the routines. Right: the editor (name, description, steps). "Say something", "Play a sound" and "Wait" have
+// their own fields; other actions take their details as JSON.
 Item {
     id: tab
+    objectName: "routinesTab"
     readonly property var tr: settings.tr
     readonly property var th: look.colors
     property int current: -1
@@ -21,6 +23,16 @@ Item {
     }
     function blank() { current = -1; old = ""; name = ""; desc = ""; steps = [{tool: "open_app", args: "{\"name\": \"\"}"}]; dirty = true }
     function put(i, k, v) { var a = steps.slice(); a[i] = Object.assign({}, a[i]); a[i][k] = v; steps = a; dirty = true }
+    // while typing: change the step in place - a new array would rebuild every row and take the focus away
+    function edit(i, args) { steps[i].args = args; dirty = true }
+    function argsOf(s) { try { var o = JSON.parse(s.args || "{}"); return (o && typeof o === "object") ? o : {} } catch (e) { return {} } }
+    function defaultArgs(t) {
+        var d = {say: {text: ""}, play_sound: {path: "", wait: false}, wait: {seconds: 2}, open_app: {name: ""},
+                 volume: {level: 40}, media: {action: "play"}, play_music: {query: ""}, desktop: {action: "switch", target: "1"},
+                 open_url: {url: "https://"}}
+        return JSON.stringify(d[t] || {})
+    }
+    function setTool(i, t) { var a = steps.slice(); a[i] = {tool: t, args: defaultArgs(t)}; steps = a; dirty = true }
     function move(i, d) { var a = steps.slice(); var j = i + d; if (j < 0 || j >= a.length) return; var t = a[i]; a[i] = a[j]; a[j] = t; steps = a; dirty = true }
     function removeStep(i) { var a = steps.slice(); a.splice(i, 1); steps = a; dirty = true }
     function save() {
@@ -116,16 +128,43 @@ Item {
                                     Layout.fillWidth: true
                                     spacing: 6
                                     Text { text: (index + 1) + "."; color: tab.th.dim; font.pixelSize: 13; Layout.preferredWidth: 22 }
-                                    Dropdown { Layout.fillWidth: true; options: settings.toolNames.map(function(n) { return {value: n, label: n} })
-                                               value: modelData.tool; onChosen: function(v) { tab.put(index, "tool", v) } }
+                                    Dropdown { Layout.fillWidth: true; options: settings.toolOptions
+                                               value: modelData.tool; onChosen: function(v) { if (v !== modelData.tool) tab.setTool(index, v) } }
                                     Btn { small: true; text: "↑"; enabled: index > 0; onClicked: tab.move(index, -1) }
                                     Btn { small: true; text: "↓"; enabled: index < tab.steps.length - 1; onClicked: tab.move(index, 1) }
                                     Btn { small: true; text: "✕"; onClicked: tab.removeStep(index) }
                                 }
-                                InputField { Layout.fillWidth: true; Layout.leftMargin: 28; value: modelData.args
+                                // Say something: the sentence (spoken when this step is reached)
+                                InputField { objectName: "sayField"; visible: modelData.tool === "say"
+                                             Layout.fillWidth: true; Layout.leftMargin: 28
+                                             value: tab.argsOf(modelData).text || ""; placeholderText: tab.tr.say_text
+                                             onTextEdited: tab.edit(index, JSON.stringify({text: text})) }
+                                // Play a sound: file picker + "wait until it ends"
+                                RowLayout { visible: modelData.tool === "play_sound"; Layout.fillWidth: true; Layout.leftMargin: 28
+                                    spacing: 10
+                                    readonly property var a: tab.argsOf(modelData)
+                                    Btn { small: true; text: "♪ " + tab.tr.choose_sound
+                                          onClicked: { var r = settings.call("pickSound", {})
+                                                       if (r && r.path) tab.put(index, "args", JSON.stringify({path: r.path, wait: parent.a.wait === true})) } }
+                                    Text { Layout.fillWidth: true; text: parent.a.path ? parent.a.path.split(/[\\/]/).pop() : tab.tr.no_sound
+                                           color: parent.a.path ? tab.th.fg : tab.th.dim; elide: Text.ElideMiddle; font.pixelSize: 12 }
+                                    ToggleSwitch { checked: parent.a.wait === true
+                                                   onToggled: function(on) { tab.put(index, "args", JSON.stringify({path: parent.a.path || "", wait: on})) } }
+                                    Text { text: tab.tr.wait_sound; color: tab.th.dim; font.pixelSize: 12 }
+                                }
+                                // Wait: seconds
+                                RowLayout { visible: modelData.tool === "wait"; Layout.leftMargin: 28; spacing: 8
+                                    InputField { implicitWidth: 90; value: String(tab.argsOf(modelData).seconds || 1)
+                                                 onTextEdited: { var n = parseFloat(text.replace(",", "."))
+                                                                 if (!isNaN(n)) tab.edit(index, JSON.stringify({seconds: n})) } }
+                                    Text { text: tab.tr.wait_seconds; color: tab.th.dim; font.pixelSize: 12 }
+                                }
+                                // everything else: the details as JSON
+                                InputField { objectName: "argsField"; visible: ["say", "play_sound", "wait"].indexOf(modelData.tool) < 0
+                                             Layout.fillWidth: true; Layout.leftMargin: 28; value: modelData.args
                                              placeholderText: tab.tr.args
                                              font.family: Qt.platform.os === "windows" ? "Consolas" : "monospace"
-                                             onTextEdited: tab.put(index, "args", text) }
+                                             onTextEdited: tab.edit(index, text) }
                             }
                         }
                     }

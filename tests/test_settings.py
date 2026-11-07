@@ -103,7 +103,8 @@ def test_apps_aliases_and_desktop_rules(sw):
 def test_routines_editor(sw):
     w, system, _ = sw
     call(w, "tab", name="routines")
-    assert "open_app" in w.model.get("toolNames") and "run_routine" not in w.model.get("toolNames")
+    names = [o["value"] for o in w.model.get("toolOptions")]
+    assert "open_app" in names and "play_sound" in names and "run_routine" not in names and names[0] == "say"
     r = call(w, "saveRoutine", name="Focus", steps=[{"tool": "open_app", "args": '{"name": "Notepad"}'},
                                                    {"tool": "volume", "args": '{"level": 20}'}])
     assert r["ok"]
@@ -292,3 +293,71 @@ def test_closing_the_window_frees_it(sw):
         QCoreApplication.processEvents()
     assert w.window is None and w.engine is None and closed == [1]
     assert paused == [False]               # the wake word listens again
+
+
+def _pump(n=10):
+    from PySide6.QtCore import QCoreApplication
+
+    for _ in range(n):
+        QCoreApplication.processEvents()
+
+
+def test_routine_editor_sound_and_announcement_steps(sw, tmp_path):
+    """The friendly fields: typing keeps the field (and its focus), the sound picker fills the step, Run now speaks."""
+    import shiboken6
+    from PySide6.QtCore import QEvent, QMetaObject, Qt
+    from PySide6.QtGui import QGuiApplication, QKeyEvent
+
+    w, system, _ = sw
+    intro = tmp_path / "user" / "Music" / "intro.mp3"
+    intro.parent.mkdir(parents=True, exist_ok=True)
+    intro.write_bytes(b"ID3")
+    w.d.file_dialog = lambda title, filt: str(intro)
+    assert call(w, "pickSound")["path"] == str(intro)
+    assert call(w, "saveRoutine", name="Gaming mode", steps=[{"tool": "say", "args": '{"text": "Gaming mode on"}'},
+                                                           {"tool": "play_sound", "args": json.dumps({"path": str(intro)})}])["ok"]
+    assert "play_sound intro.mp3" in w.model.get("routines")[0]["summary"]
+    assert w.show()
+    call(w, "tab", name="routines")
+    _pump()
+    from PySide6.QtQuick import QQuickItem
+
+    def visual(item):                       # Repeater rows are visual children only, not QObject children
+        yield item
+        for child in item.childItems():
+            yield from visual(child)
+
+    tab = w.window.findChildren(QQuickItem, "routinesTab")[0]
+    field = next(i for i in visual(tab) if i.objectName() == "sayField" and i.isVisible())
+    assert field.property("text") == "Gaming mode on"
+    field.forceActiveFocus()
+    field.setProperty("cursorPosition", len("Gaming mode on"))
+    for ch in "!!":
+        for kind in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+            QGuiApplication.sendEvent(w.window, QKeyEvent(kind, Qt.Key.Key_Exclam, Qt.KeyboardModifier.NoModifier, ch))
+        _pump(3)
+    assert shiboken6.isValid(field) and field.hasActiveFocus()          # not rebuilt while typing
+    assert field.property("text") == "Gaming mode on!!"
+    QMetaObject.invokeMethod(tab, "save")
+    steps = system.services["routines"].get("Gaming mode").steps
+    assert steps[0] == {"tool": "say", "args": {"text": "Gaming mode on!!"}}
+    assert steps[1]["tool"] == "play_sound" and steps[1]["args"]["path"] == str(intro)
+
+    spoken = []
+
+    class _Speaker:
+        def say(self, text, *a):
+            spoken.append(text)
+
+    class _Stack:
+        speaker = _Speaker()
+
+    w.d.voice = lambda: _Stack()
+    call(w, "runRoutine", name="Gaming mode")
+    import time
+    deadline = time.time() + 5
+    while time.time() < deadline and not (spoken and system.registry.platform.sound.played):
+        time.sleep(0.02)
+    assert spoken == ["Gaming mode on!!"] and system.registry.platform.sound.played == [(str(intro), False)]
+    w.window.close()                      # like the X button (frees the QML before the fixture ends)
+    _pump()

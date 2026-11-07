@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -491,6 +492,77 @@ class WinAudio:
         self._ep().SetMute(1 if mute else 0, None)
 
 
+class WinSound:
+    """Sound files through Windows' MCI player: MP3/WAV/WMA without a window or extra packages. Each sound runs
+    on its own thread (MCI devices belong to the thread that opened them) and polls for stop/cancel."""
+
+    MAX_S = 900.0        # a routine's sound is never longer than 15 minutes
+
+    def __init__(self) -> None:
+        import ctypes
+
+        winmm = ctypes.WinDLL("winmm")
+        self._send = winmm.mciSendStringW
+        self._send.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_void_p]
+        self._send.restype = ctypes.c_uint
+        self._error = winmm.mciGetErrorStringW
+        self._error.argtypes = [ctypes.c_uint, ctypes.c_wchar_p, ctypes.c_uint]
+        self._lock = threading.Lock()
+        self._stops: set[threading.Event] = set()
+        self._n = 0
+
+    def _cmd(self, command: str) -> str:
+        import ctypes
+
+        out = ctypes.create_unicode_buffer(256)
+        err = self._send(command, out, 256, None)
+        if err:
+            msg = ctypes.create_unicode_buffer(256)
+            self._error(err, msg, 256)
+            raise OSError(msg.value or f"MCI error {err}")
+        return out.value
+
+    def play(self, path: str, wait: bool, cancelled: Callable[[], bool] | None = None) -> None:
+        stop, done, errors = threading.Event(), threading.Event(), []
+        with self._lock:
+            self._n += 1
+            alias = f"assistant_sound_{self._n}"
+            self._stops.add(stop)
+
+        def run() -> None:
+            try:
+                self._cmd(f'open "{path}" type mpegvideo alias {alias}')
+                try:
+                    self._cmd(f"play {alias}")
+                    t0, seen = time.monotonic(), False
+                    while not stop.wait(0.1):
+                        if cancelled is not None and cancelled():
+                            break
+                        mode = self._cmd(f"status {alias} mode")     # playing | stopped | not ready | seeking ...
+                        seen = seen or mode == "playing"
+                        took = time.monotonic() - t0
+                        if (mode == "stopped" and (seen or took > 1.5)) or took > self.MAX_S:
+                            break
+                finally:
+                    self._cmd(f"close {alias}")
+            except OSError as e:
+                errors.append(e)
+            finally:
+                with self._lock:
+                    self._stops.discard(stop)
+                done.set()
+
+        threading.Thread(target=run, name="sound", daemon=True).start()
+        done.wait(None if wait else 0.5)     # (not waiting: still report a file that can't be played)
+        if errors:
+            raise ToolError(f"Can't play {Path(path).name}: {errors[0]}")
+
+    def stop_all(self) -> None:
+        with self._lock:
+            for stop in self._stops:
+                stop.set()
+
+
 class WinDisplay:
     """Laptop panel brightness through WMI (external monitors would need DDC/CI)."""
 
@@ -874,6 +946,7 @@ def create_windows_platform(paths: Any) -> Platform:
     send_key = (lambda vk: inp._send([key_input(vk, False), key_input(vk, True)])) if inp else None
     attempt("media", lambda: WinMedia(send_key), "Media control")
     attempt("audio", WinAudio, "Volume control")
+    attempt("sound", WinSound, "Playing sound files")
     attempt("display", WinDisplay, "Brightness control")
     attempt("clipboard", WinClipboard, "Clipboard")
     attempt("power", WinPower, "Power control")

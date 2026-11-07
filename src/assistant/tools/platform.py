@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -117,6 +118,11 @@ class AudioBackend(Protocol):
     def set_mute(self, mute: bool) -> None: ...
 
 
+class SoundBackend(Protocol):
+    def play(self, path: str, wait: bool, cancelled: Callable[[], bool] | None = None) -> None: ...
+    def stop_all(self) -> None: ...
+
+
 class DisplayBackend(Protocol):
     def get_brightness(self) -> int | None: ...
     def set_brightness(self, percent: int) -> None: ...
@@ -198,6 +204,7 @@ class Platform:
     desktops: DesktopsBackend = field(default_factory=lambda: Unsupported("Virtual desktops"))  # type: ignore[assignment]
     media: MediaBackend = field(default_factory=lambda: Unsupported("Media control"))  # type: ignore[assignment]
     audio: AudioBackend = field(default_factory=lambda: Unsupported("Volume control"))  # type: ignore[assignment]
+    sound: SoundBackend = field(default_factory=lambda: Unsupported("Playing sound files"))  # type: ignore[assignment]
     display: DisplayBackend = field(default_factory=lambda: Unsupported("Brightness control"))  # type: ignore[assignment]
     clipboard: ClipboardBackend = field(default_factory=lambda: Unsupported("Clipboard"))  # type: ignore[assignment]
     power: PowerBackend = field(default_factory=lambda: Unsupported("Power control"))  # type: ignore[assignment]

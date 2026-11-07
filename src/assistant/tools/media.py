@@ -6,12 +6,13 @@ import logging
 import re
 import time
 import urllib.parse
+from pathlib import Path
 from typing import Any
 
 from .apps import DesktopGuard, _svc, open_app, window_matches
 from .base import Plan, Tool, ToolContext, ToolError, ToolRegistry, ToolResult
 from .platform import UiElement
-from .schema import Str, obj
+from .schema import Bool, Str, obj
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +43,27 @@ def _run_media(a: dict[str, Any], ctx: ToolContext, plan: Plan) -> ToolResult:
     if not ok:
         return ToolResult(False, "No media player responded.")
     return ToolResult(True, f"{ACTION_WORDS.get(action, action)}.")
+
+
+SOUND_EXT = (".mp3", ".wav", ".wma", ".m4a", ".aac")
+
+
+def _plan_sound(a: dict[str, Any], ctx: ToolContext) -> Plan:
+    name = a["path"].replace("\\", "/").rsplit("/", 1)[-1]
+    ext = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
+    if ext not in SOUND_EXT:
+        raise ToolError(f"{name} is not a sound file - use an MP3 or WAV file.")
+    return Plan(f"Play the sound {name}", paths=[(a["path"], "read")], capability="media")
+
+
+def _run_sound(a: dict[str, Any], ctx: ToolContext, plan: Plan) -> ToolResult:
+    p = Path(ctx.path(a["path"]).path)
+    if not p.is_file():
+        raise ToolError(f"The sound file {p} doesn't exist (any more).")
+    wait = bool(a.get("wait"))
+    token = ctx.task.cancel
+    ctx.platform.sound.play(str(p), wait, (lambda: token.cancelled) if wait else None)
+    return ToolResult(True, f"Played {p.name}." if wait else f"Playing {p.name}.")
 
 
 def pick_play_button(elements: list[UiElement]) -> UiElement | None:
@@ -118,6 +140,11 @@ def register(reg: ToolRegistry) -> None:
         obj(("query",), query=Str("What to play, e.g. 'Bohemian Rhapsody' or 'lofi beats'", min_len=1, max_len=200),
             app=Str("Music app; empty = the user's default", max_len=60)),
         "media", _plan_play, _run_play))
+    reg.register(Tool(   # for routines ("gaming mode" starts with your sound); not offered to the language model
+        "play_sound", "Play a sound file (MP3 or WAV) in the background, e.g. at the start of a routine.",
+        obj(("path",), path=Str("The sound file", min_len=1, max_len=400),
+            wait=Bool("Wait until the sound has finished before the next step")),
+        "media", _plan_sound, _run_sound, llm=False))
 
 
 __all__ = ["pick_play_button", "play_in_spotify", "register", "ToolError"]

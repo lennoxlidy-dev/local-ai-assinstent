@@ -111,7 +111,7 @@ listens for 5 seconds for a follow-up without the name.
 | "Jarvis, create a file shopping.txt on the desktop with milk, eggs, bread" | asks first and shows the exact path |
 | "Jarvis, what's on my screen?" | UI Automation / OCR / vision |
 | "Jarvis, remember that my sister's name is Lea" / "what do you know about me?" / "forget that …" | memory |
-| "Jarvis, gaming mode" | runs a routine (create routines in the wizard or in *Settings → Routines*) |
+| "Jarvis, gaming mode" / "start gaming mode" | runs your routine instantly (see [Routines](#routines)) |
 | "Jarvis, stop" | stops talking and cancels the current request |
 
 - **Push-to-talk:** `Ctrl+Alt+Space` (no name needed). **Panic:** `Ctrl+Alt+Esc` silences it, cancels
@@ -125,6 +125,30 @@ listens for 5 seconds for a follow-up without the name.
   or starting the app a second time opens the settings.
 - **Settings window:** General · Voice & wake word · AI model & performance · Permissions · Apps & aliases ·
   Routines · History · Privacy · Appearance · Action log. Every change is saved immediately.
+
+## Routines
+
+A routine starts several things with one sentence, e.g. **"Jarvis, gaming mode"**. Say its name, alone or with
+"start" / "activate" / "… on" ("starte den Spielmodus", "Spielmodus an" in German). It runs immediately, even
+without the language model. Create routines in the setup wizard, from a template, or in *Settings → Routines*:
+
+| Step | What it does |
+|---|---|
+| **Say something** | speaks a sentence the moment the routine reaches it, e.g. "Gaming mode activated. All systems online." |
+| **Play a sound** | plays an MP3 or WAV file in the background (no player window). Click **Choose sound…**; switch on "Wait until it ends" to start the next step only after the sound |
+| **Open an app** | e.g. Steam, Discord, your game launcher (`{"name": "Steam"}`) |
+| **Volume**, **Media**, **Play music**, **Virtual desktop**, **Wait**, … | everything the assistant can do, with the same permission checks |
+
+Example: a gaming routine that sounds like a movie AI:
+
+1. *Settings → Routines → From template → Gaming mode* (Steam, Discord, volume 40 % and "Gaming mode activated").
+2. **+ Add step → Play a sound**, then click **Choose sound…** and pick your intro sound (any MP3/WAV on your PC).
+   Move it to the top with ↑ so it plays while everything starts.
+3. Change the **Say something** text to your own line, add more **Open an app** steps (e.g. your game), then **Save**.
+4. **▶ Run now** tries it, or just say **"Jarvis, gaming mode"**.
+
+"Jarvis, stop" or the panic hotkey also stops a routine's sound. The voice of the spoken lines is chosen in
+*Settings → Voice* (10 voices: F1–F5, M1–M5).
 
 ## Privacy and safety
 

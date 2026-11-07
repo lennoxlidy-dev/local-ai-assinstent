@@ -179,8 +179,16 @@ _T: dict[str, tuple[str, str]] = {
     "add_step": ("Add step", "Schritt hinzufügen"), "run_now": ("Run now", "Jetzt ausführen"),
     "no_routines": ("No routines yet. You can also say “create a routine called …”.",
                     "Noch keine Routinen. Du kannst auch sagen: „Erstelle eine Routine namens …“."),
-    "routine_hint": ("Each step is a normal action and goes through the permission checks.",
-                     "Jeder Schritt ist eine normale Aktion und durchläuft die Berechtigungsprüfung."),
+    "routine_hint": ("Say the routine's name to start it (“gaming mode”, “start gaming mode”). Each step is a normal "
+                     "action and goes through the permission checks.",
+                     "Sag den Namen der Routine, um sie zu starten („Spielmodus“, „starte den Spielmodus“). Jeder "
+                     "Schritt ist eine normale Aktion und durchläuft die Berechtigungsprüfung."),
+    "say_text": ("What it says, e.g. “Gaming mode activated. Have fun!”",
+                 "Was gesagt wird, z. B. „Spielmodus aktiviert. Viel Spaß!“"),
+    "choose_sound": ("Choose sound…", "Sound wählen…"),
+    "no_sound": ("No sound chosen yet (MP3 or WAV)", "Noch kein Sound gewählt (MP3 oder WAV)"),
+    "wait_sound": ("Wait until it ends", "Warten, bis er zu Ende ist"),
+    "wait_seconds": ("Seconds", "Sekunden"),
     # history
     "search_conv": ("Search conversations…", "Gespräche durchsuchen…"),
     "no_conv": ("No conversations yet.", "Noch keine Gespräche."),
@@ -231,6 +239,29 @@ _T: dict[str, tuple[str, str]] = {
     "d_denied": ("declined by you", "von dir abgelehnt"),
     "d_blocked": ("blocked", "gesperrt"), "d_cancelled": ("cancelled", "abgebrochen"), "d_invalid": ("invalid", "ungültig"),
 }
+
+
+#: Routine step names in the editor's list (others show their tool name).
+TOOL_LABELS: dict[str, tuple[str, str]] = {
+    "say": ("Say something", "Etwas sagen"),
+    "play_sound": ("Play a sound", "Einen Sound abspielen"),
+    "wait": ("Wait", "Warten"),
+    "open_app": ("Open an app", "App öffnen"),
+    "volume": ("Volume", "Lautstärke"),
+    "media": ("Media: play / pause / next", "Medien: Play / Pause / Weiter"),
+    "play_music": ("Play music", "Musik abspielen"),
+    "desktop": ("Virtual desktop", "Virtueller Desktop"),
+    "window": ("Window: close / minimize / focus", "Fenster: schließen / minimieren / fokussieren"),
+    "open_url": ("Open a website", "Website öffnen"),
+    "brightness": ("Brightness", "Helligkeit"),
+    "power": ("Lock / sleep / shut down", "Sperren / Energiesparen / Herunterfahren"),
+    "timer": ("Timer / reminder", "Timer / Erinnerung"),
+}
+
+
+def tool_label(name: str, lang: str) -> str:
+    pair = TOOL_LABELS.get(name)
+    return f"{pair[1] if lang == 'de' else pair[0]}  ({name})" if pair else name
 
 
 def strings(lang: str) -> dict[str, str]:

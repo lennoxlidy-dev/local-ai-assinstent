@@ -119,7 +119,7 @@ src/assistant/
                        send2trash IFileOperation, Everything SDK, SHGetKnownFolderPath)
     inputs.py          SendInput (fixed-width ctypes structs, unit-tested layout)
     com.py             per-thread COM init; WinRT worker thread (MTA + asyncio)
-tests/                 pytest (381 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
+tests/                 pytest (400 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
                        the real speech models - each skipped when not installed)
 bench/                 llm_bench.py + cases.py: GPU latency + tool-calling accuracy per model;
                        perf_bench.py: every performance target of the spec (idle, wake, STT, TTS, fast path, LLM)
@@ -511,6 +511,23 @@ Windows' blank program icon):
   deliver exact zeros - the wake word then never fires and nothing says why. After 6 s of digital silence a
   notification explains the setting (checked only until the first sound, so no idle cost).
 - `--self-test` also checks that the app icon is set.
+
+Version 0.1.4 (feedback: a gaming routine that "sounds like" a clip and starts everything for gaming):
+
+- **Saying a routine's name runs it at once** (fast path, `match_routine`): "gaming mode", "start/activate/run …",
+  "… on", "starte den …", "… an"; the whole sentence must be the name (fuzzy ≥ 90 for recognition slips like "gaming
+  mod"). Before, routines only ran when the language model chose `run_routine`, i.e. not at all while it was missing.
+- **"say" steps are spoken when they are reached**, through the same sentence stream the language model's answer uses
+  (`Task.say`), so "Gaming mode activated." comes right away while Steam starts; the reply is the routine's own lines
+  (or "<name>: done."). "Run now" in the settings speaks them too.
+- **New step `play_sound`** (MP3/WAV/WMA/M4A, Windows MCI via winmm - no window, no extra package; own thread per
+  sound, polling for stop): optional "wait until it ends"; folder rules apply to the file; not offered to the language
+  model (`llm=False`). "Stop" and the panic hotkey stop sounds even after the routine has finished.
+- **Routine editor**: friendly step names, a text field for "Say something", "Choose sound…" + "wait" switch for
+  "Play a sound", seconds for "Wait"; JSON only for the other actions. Fixed: every keystroke rebuilt all step rows,
+  which destroyed the field being typed in (one character, then the focus was gone) - text edits now change the step
+  in place (regression test types into the field). The gaming template starts with "Gaming mode activated. Have fun!".
+- The TikTok clip the request referred to couldn't be opened here (blocked); any sound file works as the intro.
 
 ## How to test
 

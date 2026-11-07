@@ -403,6 +403,7 @@ def _retention_options(env: WizardEnv) -> list[Option]:
 
 ROUTINE_TEMPLATES: list[dict[str, Any]] = [
     {"key": "gaming", "name": t("Gaming mode", "Spielmodus"), "apps": ["Steam", "Discord"], "volume": 40,
+     "first": [{"tool": "say", "args": {"text": t("Gaming mode activated. Have fun!", "Spielmodus aktiviert. Viel Spaß!")}}],
      "extra": []},
     {"key": "work", "name": t("Work mode", "Arbeitsmodus"), "apps": ["Outlook", "Microsoft Teams"], "volume": 30,
      "extra": []},
@@ -425,15 +426,20 @@ def _routine_defaults(env: WizardEnv) -> list[dict[str, Any]]:
     return out
 
 
-def routine_steps(item: dict[str, Any]) -> list[dict[str, Any]]:
+def _localized(step: dict[str, Any], lang: str) -> dict[str, Any]:
+    args = {k: (v.get(lang) or v["en"]) if isinstance(v, dict) and "en" in v else v for k, v in step["args"].items()}
+    return {"tool": step["tool"], "args": args}
+
+
+def routine_steps(item: dict[str, Any], lang: str = "en") -> list[dict[str, Any]]:
     tpl = next((x for x in ROUTINE_TEMPLATES if x["key"] == item.get("key")), None)
-    steps: list[dict[str, Any]] = []
+    steps: list[dict[str, Any]] = [_localized(x, lang) for x in tpl.get("first", [])] if tpl else []
     for app in [a.strip() for a in str(item.get("apps", "")).split(",") if a.strip()][:6]:
         steps.append({"tool": "open_app", "args": {"name": app}})
     vol = item.get("volume")
     if vol is not None and str(vol) != "":
         steps.append({"tool": "volume", "args": {"level": max(0, min(100, int(float(vol))))}})
-    steps += list(tpl["extra"]) if tpl else []
+    steps += [_localized(x, lang) for x in tpl["extra"]] if tpl else []
     return steps
 
 
@@ -446,7 +452,7 @@ def _apply_routines(env: WizardEnv, value: Any) -> None:
         name = str(item.get("name", "")).strip()
         if not item.get("enabled") or not name:
             continue
-        steps = routine_steps(item)
+        steps = routine_steps(item, env.lang)
         if steps:
             env.routines.save(Routine(name=name, steps=steps, description="created in setup"))
 

@@ -13,6 +13,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from rapidfuzz import fuzz
+
 from ..tools.base import ToolResult
 from ..tools.system import parse_duration, parse_time_of_day
 from .numbers import spoken_duration, words_to_digits
@@ -230,6 +232,44 @@ _NOT_APPS = re.compile(r"(\\|/|\.[a-z0-9]{2,4}$|\b(file|files|folder|website|web
 PLAY_FALLBACK = [("open_app", {"name": "music"}), ("wait", {"seconds": 3}), ("media", {"action": "play"})]
 
 
+# "gaming mode", "start gaming mode", "activate my gaming mode now", "Spielmodus an", "starte den Spielmodus"
+_ROUTINE_START = re.compile(
+    r"^((start|run|activate|begin|launch|enable|do|enter|turn on|switch on|switch to|go into|let's do|time for|"
+    r"starte|start|aktiviere|aktivier|mach|schalte|schalt|führe|führ|beginne|zeit für)\s+)"
+    r"((the|my|a|den|die|das|meinen|meine|mein|in den)\s+)?")
+_ROUTINE_END = re.compile(r"\s+(on|an|ein|now|jetzt|routine|starten|aktivieren|einschalten|ausführen|an machen)$")
+
+
+def match_routine(t: str, routines: list[str]) -> str | None:
+    """Which saved routine a normalized sentence asks for (the whole sentence must be the name)."""
+    if not routines:
+        return None
+    cands = {t, _ROUTINE_START.sub("", t)}
+    for c in list(cands):
+        while (m := _ROUTINE_END.search(c)) is not None:
+            c = c[:m.start()]
+            cands.add(c)
+    best, score = None, 0.0
+    for name in routines:
+        key = normalize(name, [])
+        if not key:
+            continue
+        for c in cands:
+            sc = 100.0 if c == key else fuzz.ratio(c, key)     # (speech recognition: "gaming mod")
+            if sc > score:
+                best, score = name, sc
+    return best if score >= 90 else None
+
+
+def routine_reply(res: ToolResult, lang: str) -> str:
+    data = res.data or {}
+    said = data.get("said") or []
+    if said:                                  # its own announcement ("Gaming mode activated.")
+        return " ".join(said)
+    name = data.get("routine", "")
+    return f"{name}: erledigt." if lang == "de" else f"{name}: done."
+
+
 def _full(p: re.Pattern[str], t: str) -> re.Match[str] | None:
     return p.fullmatch(t)
 
@@ -246,10 +286,11 @@ class FastPath:
     """``match(text)`` -> FastIntent or None. ``resolve_app(name)`` must return a display name or None."""
 
     def __init__(self, resolve_app: Callable[[str], str | None], names: Callable[[], list[str]],
-                 language: Callable[[], str]):
+                 language: Callable[[], str], routines: Callable[[], list[str]] | None = None):
         self.resolve_app = resolve_app
         self.names = names
         self.language = language
+        self.routines = routines or (lambda: [])
 
     def match(self, text: str) -> FastIntent | None:
         t = normalize(text, self.names())
@@ -264,6 +305,9 @@ class FastPath:
                                               else f"It's {now:%I:%M %p}.".replace(" 0", " ").lstrip("0")))
         if _full(DATE, t):
             return FastIntent("date", answer=spoken_date(dt.date.today(), lang))
+        routine = match_routine(t, self.routines())       # your own routine names come before everything else
+        if routine is not None:
+            return FastIntent("routine.run", "run_routine", {"name": routine}, routine_reply)
         for intent, pattern in (("pause", PAUSE), ("next", NEXT), ("previous", PREV)):
             if _full(pattern, t):
                 return FastIntent(f"media.{intent}", "media", {"action": intent}, MEDIA_REPLY[intent])

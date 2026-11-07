@@ -47,7 +47,7 @@ def validate_steps(reg: ToolRegistry, steps: list[dict[str, Any]]) -> list[dict[
 
 
 def run_routine(reg: ToolRegistry, routine: Routine, ctx: ToolContext) -> ToolResult:
-    lines, ok_all = [], True
+    lines, said, ok_all = [], [], True
     for i, step in enumerate(routine.steps, 1):
         ctx.check_cancel()
         name, args = step["tool"], step.get("args", {})
@@ -56,13 +56,20 @@ def run_routine(reg: ToolRegistry, routine: Routine, ctx: ToolContext) -> ToolRe
                 ctx.check_cancel()
             continue
         if name == "say":
-            lines.append(args.get("text", ""))
+            text = str(args.get("text", "")).strip()
+            if text:
+                text += "" if text[-1] in ".!?…" else "."
+                said.append(text)
+                lines.append(text)
+                if ctx.task.say is not None:          # voice request: speak it now, while the next steps run
+                    ctx.task.say(text + " ")
             continue
         res = reg.invoke(name, args, ctx.task)
         ok_all &= res.ok
         lines.append(f"{i}. {name}: {res.text.splitlines()[0] if res.text else ('ok' if res.ok else 'failed')}")
     head = f"Routine “{routine.name}” {'done' if ok_all else 'finished with problems'}."
-    return ToolResult(ok_all, head + "\n" + "\n".join(x for x in lines if x))
+    return ToolResult(ok_all, head + "\n" + "\n".join(x for x in lines if x),
+                      data={"routine": routine.name, "said": said})
 
 
 def _store(ctx: ToolContext):  # type: ignore[no-untyped-def]

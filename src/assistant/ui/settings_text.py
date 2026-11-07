@@ -186,7 +186,7 @@ _T: dict[str, tuple[str, str]] = {
     "say_text": ("What it says, e.g. “Gaming mode activated. Have fun!”",
                  "Was gesagt wird, z. B. „Spielmodus aktiviert. Viel Spaß!“"),
     "choose_sound": ("Choose sound…", "Sound wählen…"),
-    "no_sound": ("No sound chosen yet (MP3 or WAV)", "Noch kein Sound gewählt (MP3 oder WAV)"),
+    "no_sound": ("No sound chosen yet (MP3, WAV, FLAC, OGG)", "Noch kein Sound gewählt (MP3, WAV, FLAC, OGG)"),
     "sound_once": ("Plays once (the next steps start at once)", "Spielt einmal (die nächsten Schritte starten sofort)"),
     "sound_wait": ("Plays once, then the next step", "Spielt einmal, dann der nächste Schritt"),
     "sound_until": ("Keeps playing until the routine is done", "Spielt, bis die Routine fertig ist"),

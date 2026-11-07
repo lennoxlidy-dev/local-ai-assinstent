@@ -644,7 +644,7 @@ class SettingsWindow(QObject):
         return self.do_saveRoutine(tpl["name"][self._lang()], steps, "")
 
     def do_pickSound(self) -> dict[str, Any]:  # noqa: N802
-        title, filt = self.t("choose_sound"), "Sounds (*.mp3 *.wav *.wma *.m4a *.aac)"
+        title, filt = self.t("choose_sound"), "Sounds (*.mp3 *.wav *.flac *.ogg *.wma *.m4a *.aac)"
         if self.d.file_dialog is not None:
             path = self.d.file_dialog(title, filt)
         else:

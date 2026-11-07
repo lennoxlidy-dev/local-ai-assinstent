@@ -19,7 +19,7 @@ for pkg in ("sherpa_onnx",):
     binaries += collect_dynamic_libs(pkg)
 # (the PortAudio DLL of sounddevice comes in through PyInstaller's own sounddevice hook)
 hidden = collect_submodules("assistant") + ["sentencepiece", "soxr", "tomli_w", "rapidfuzz", "send2trash",
-                                            "pypdfium2", "sounddevice", "psutil"]
+                                            "pypdfium2", "sounddevice", "soundfile", "psutil"]
 if WIN:
     hidden += collect_submodules("winrt") + collect_submodules("pyvda") + collect_submodules("pycaw")
     hidden += ["pythoncom", "pywintypes", "win32api", "win32con", "win32gui", "win32process", "win32clipboard",

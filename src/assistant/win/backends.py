@@ -937,7 +937,17 @@ def create_windows_platform(paths: Any) -> Platform:
     send_key = (lambda vk: inp._send([key_input(vk, False), key_input(vk, True)])) if inp else None
     attempt("media", lambda: WinMedia(send_key), "Media control")
     attempt("audio", WinAudio, "Volume control")
-    attempt("sound", WinSound, "Playing sound files")
+    def sound() -> Any:          # MP3/WAV/FLAC/OGG decoded + played by us; WMA/M4A/AAC via Windows' MCI player
+        from ..audio.sound import SoundEngine
+
+        try:
+            mci = WinSound()
+        except Exception as e:
+            log.warning("MCI player unavailable: %s", e)
+            mci = None
+        return SoundEngine(fallback=mci)
+
+    attempt("sound", sound, "Playing sound files")
     attempt("display", WinDisplay, "Brightness control")
     attempt("clipboard", WinClipboard, "Clipboard")
     attempt("power", WinPower, "Power control")

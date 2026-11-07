@@ -119,7 +119,7 @@ src/assistant/
                        send2trash IFileOperation, Everything SDK, SHGetKnownFolderPath)
     inputs.py          SendInput (fixed-width ctypes structs, unit-tested layout)
     com.py             per-thread COM init; WinRT worker thread (MTA + asyncio)
-tests/                 pytest (427 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
+tests/                 pytest (441 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
                        the real speech models - each skipped when not installed)
 bench/                 llm_bench.py + cases.py: GPU latency + tool-calling accuracy per model;
                        perf_bench.py: every performance target of the spec (idle, wake, STT, TTS, fast path, LLM)
@@ -560,6 +560,23 @@ minimum time for the sound):
   available: …"), the voice command uses the same text.
 - Editor: the sound step has "how it ends" (once / then next step / until the routine is done) + "at least … s";
   the driver step a check/install choice.
+
+Version 0.1.7 (feedback: "make sure .mp3 files work too"):
+
+- **Routine sounds are decoded and played by the assistant itself** (`audio/sound.py`, `SoundEngine`): soundfile
+  (libsndfile 1.2.2 - its Windows build includes the mpg123 MP3 decoder; checked in the wheel's DLL) decodes MP3, WAV,
+  FLAC, OGG; output goes through sounddevice on the voice's output device at the voice's 44.1 kHz (soxr), so a sound
+  works wherever the voice works. WMA/M4A/AAC still go to Windows' MCI player (also the fallback if a file can't be
+  decoded). Linux gets the engine too (development).
+- **libsndfile bug found and avoided**: its MP3 decoder garbles VBR files (the common kind) wherever a read is split -
+  silence or wrong audio at each boundary, with 2 KB as well as 30 s pieces; 7 of 22 test MP3s broke with 2 KB reads.
+  A single read call is exact, so each file is decoded in ONE read (16-bit, at most 5 minutes ≈ 50 MB; a 3-minute VBR
+  song: 0.17 s, 30 MB), resampled once and played/repeated from memory.
+- Verified: 22 MP3 variants (CBR/VBR, mono/stereo, 8-48 kHz MPEG-1/2/2.5, ID3v2 with album art, ID3v1, no Xing
+  header, a 3-minute VBR song, a real speech MP3) played through the engine match ffmpeg's decoding (length and
+  loudness every 0.1 s). Tests use small LAME-encoded MP3s in tests/data (incl. a VBR file that breaks with split
+  reads); libsndfile-written MP3s can't be used - it reads them back wrongly.
+- The .exe build includes libsndfile (PyInstaller's soundfile hook); its self-test passes.
 
 ## How to test
 

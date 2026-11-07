@@ -136,7 +136,7 @@ without the language model. Create routines in the setup wizard, from a template
 | Step | What it does |
 |---|---|
 | **Say something** | speaks a sentence the moment the routine reaches it, e.g. "Gaming mode activated. All systems online." |
-| **Play a sound** | plays an MP3 or WAV file (no player window). Click **Choose sound…**, then choose how it ends: **Plays once**; **Plays once, then the next step**; or **Keeps playing until the routine is done** (repeats if it's shorter, fades out when the last step is done). **at least … s** makes it play at least that long (a short sound repeats) |
+| **Play a sound** | plays an MP3, WAV, FLAC or OGG file (WMA/M4A through Windows' own player), no player window. Click **Choose sound…**, then choose how it ends: **Plays once**; **Plays once, then the next step**; or **Keeps playing until the routine is done** (repeats if it's shorter, fades out when the last step is done). **at least … s** makes it play at least that long (a short sound repeats) |
 | **Check / update drivers** | **Only check** says which driver updates Windows Update has; **Install** asks first and shows the Windows administrator prompt (see [Driver updates](#driver-updates)) |
 | **Open an app** | e.g. Steam, Discord, your game launcher (`{"name": "Steam"}`) |
 | **Volume**, **Media**, **Play music**, **Virtual desktop**, **Wait**, … | everything the assistant can do, with the same permission checks |

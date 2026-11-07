@@ -222,7 +222,9 @@ class Platform:
 def create_platform(paths: Any = None) -> Platform:
     """The real backends for this OS (Windows), each one loaded defensively."""
     if sys.platform != "win32":
-        return Platform()
+        from ..audio.sound import SoundEngine
+
+        return Platform(sound=SoundEngine())     # (sound files play on any OS; the rest needs Windows)
     from ..win.backends import create_windows_platform
 
     return create_windows_platform(paths)

@@ -129,6 +129,10 @@ def build_tool_system(ctx: AppContext, *, platform: Platform | None = None, conf
         file_index = FileIndex(ctx.paths.cache_dir / "files.db", roots, allowed)
         services["file_index"] = file_index
 
+    from ..audio.sound import SoundEngine
+
+    if isinstance(platform.sound, SoundEngine):    # routine sounds play where the assistant's voice plays
+        platform.sound.device = lambda: ctx.config.data.voice.output_device
     registry = ToolRegistry(gate, action_log, platform, normalizer, bus=ctx.bus, services=services)
     for module in (files, apps, media, system, screen, terminal, drivers, memory, routines):
         module.register(registry)

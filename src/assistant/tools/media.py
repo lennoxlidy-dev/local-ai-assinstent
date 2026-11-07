@@ -45,14 +45,14 @@ def _run_media(a: dict[str, Any], ctx: ToolContext, plan: Plan) -> ToolResult:
     return ToolResult(True, f"{ACTION_WORDS.get(action, action)}.")
 
 
-SOUND_EXT = (".mp3", ".wav", ".wma", ".m4a", ".aac")
+SOUND_EXT = (".mp3", ".wav", ".flac", ".ogg", ".wma", ".m4a", ".aac")
 
 
 def _plan_sound(a: dict[str, Any], ctx: ToolContext) -> Plan:
     name = a["path"].replace("\\", "/").rsplit("/", 1)[-1]
     ext = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
     if ext not in SOUND_EXT:
-        raise ToolError(f"{name} is not a sound file - use an MP3 or WAV file.")
+        raise ToolError(f"{name} is not a sound file - use an MP3, WAV, FLAC or OGG file.")
     if a.get("wait") and a.get("until_done"):
         raise ToolError("A sound can either play before the next step (wait) or until the routine is done - not both.")
     return Plan(f"Play the sound {name}", paths=[(a["path"], "read")], capability="media")
@@ -146,7 +146,7 @@ def register(reg: ToolRegistry) -> None:
             app=Str("Music app; empty = the user's default", max_len=60)),
         "media", _plan_play, _run_play))
     reg.register(Tool(   # for routines ("gaming mode" starts with your sound); not offered to the language model
-        "play_sound", "Play a sound file (MP3 or WAV) in the background, e.g. at the start of a routine.",
+        "play_sound", "Play a sound file (MP3, WAV, FLAC, OGG) in the background, e.g. at the start of a routine.",
         obj(("path",), path=Str("The sound file", min_len=1, max_len=400),
             wait=Bool("Wait until the sound has finished before the next step"),
             until_done=Bool("Keep playing (repeating) until the routine is done, then fade out"),

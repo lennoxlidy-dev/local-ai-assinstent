@@ -5,6 +5,8 @@
     python -m assistant --debug      tray app + log to the console
     python -m assistant --smoke-test 3   start, run 3 s, quit (automated check)
     python -m assistant --onboarding     open the setup wizard again
+    python -m assistant --self-test      open every window once (temporary home), report problems
+    python -m assistant --quit           ask the running assistant to quit (installer, uninstaller)
 """
 
 from __future__ import annotations
@@ -22,9 +24,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--home", metavar="DIR", help="keep all data in DIR (portable mode / testing)")
     p.add_argument("--autostart", action="store_true", help=argparse.SUPPRESS)  # launched at login
     p.add_argument("--smoke-test", type=float, metavar="SECONDS", help="start, then quit after SECONDS")
+    p.add_argument("--self-test", action="store_true",
+                   help="open every window once with a temporary home, report problems, quit (checks a build)")
+    p.add_argument("--quit", action="store_true", help="ask the running assistant to quit, wait until it has")
     p.add_argument("--setup", action="store_true", help="download llama.cpp and the language models, then exit")
     p.add_argument("--onboarding", action="store_true", help="open the setup wizard (also when it was done before)")
-    p.add_argument("--models", metavar="IDS", help="with --setup: comma-separated model ids (default: smart + fast)")
+    p.add_argument("--models", metavar="IDS",
+                   help="with --setup: comma-separated model ids, or 'auto' (default: smart + fast)")
     p.add_argument("--voice-test", nargs="+", metavar="WAV", help="run WAV files through the voice pipeline")
     p.add_argument("--speak-out", metavar="WAV", help="with --voice-test: save the spoken replies")
     p.add_argument("--fast", action="store_true", help="with --voice-test: feed audio faster than real time")
@@ -41,16 +47,18 @@ def main(argv: list[str] | None = None) -> int:
 
     fix_std_streams()
     args = parse_args(argv)
+    if args.quit:
+        return run_quit(args)
     if args.setup:
         return run_setup(args)
     if args.say or args.voice_test:
         return run_voice_tools(args)
-    if args.cli:
+    if args.cli and not args.self_test:     # AssistantCLI.exe / assistant-cli add --cli
         return run_cli(args)
     from .ui.app import run_tray
 
     return run_tray(home=args.home, autostarted=args.autostart, debug=args.debug,
-                    smoke_test_s=args.smoke_test, open_setup=args.onboarding)
+                    smoke_test_s=args.smoke_test, open_setup=args.onboarding, self_test=args.self_test)
 
 
 def run_cli(args: argparse.Namespace) -> int:
@@ -64,6 +72,35 @@ def run_cli(args: argparse.Namespace) -> int:
     return DebugCLI(ctx).run()
 
 
+def run_quit(args: argparse.Namespace, wait_s: float = 20.0) -> int:
+    """Ask the tray app (same data folder) to quit and wait for it: 0 = not running (any more)."""
+    import time
+
+    from PySide6.QtCore import QCoreApplication, QLockFile
+
+    from .core.paths import resolve_paths
+    from .ui.single_instance import SingleInstance
+
+    lock_file = resolve_paths(args.home).lock_file
+    if not lock_file.exists():
+        return 0
+    _app = QCoreApplication.instance() or QCoreApplication(sys.argv[:1])
+    lock = QLockFile(str(lock_file))
+    if lock.tryLock(100):
+        lock.unlock()
+        return 0
+    if not SingleInstance(lock_file).send("quit"):
+        print("the running assistant did not answer", file=sys.stderr)
+        return 1
+    deadline = time.monotonic() + wait_s
+    while time.monotonic() < deadline:
+        if lock.tryLock(250):
+            lock.unlock()
+            return 0
+    print(f"the assistant is still running after {wait_s:.0f} s", file=sys.stderr)
+    return 1
+
+
 def run_setup(args: argparse.Namespace) -> int:
     """Console installer for llama.cpp + models (the one-click installer in M7 calls this too)."""
     from .core import hardware
@@ -75,7 +112,12 @@ def run_setup(args: argparse.Namespace) -> int:
 
     ctx = bootstrap("cli", home=args.home, console_log=args.debug, detect_hardware="off")
     c = ctx.config.data.llm
-    ids = [m.strip() for m in (args.models or f"{c.model_smart},{c.model_fast}").split(",") if m.strip()]
+    if args.models == "auto":       # the installer: just the model that suits this PC (the wizard can add more)
+        from .onboarding.downloads import llm_models_to_get
+
+        ids = llm_models_to_get(ctx)[:1]
+    else:
+        ids = [m.strip() for m in (args.models or f"{c.model_smart},{c.model_fast}").split(",") if m.strip()]
 
     def bar(done: int, total: int, rate: float) -> None:
         pct = done / total * 100 if total else 0

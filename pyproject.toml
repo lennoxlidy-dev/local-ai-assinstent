@@ -45,6 +45,7 @@ assistant = "assistant.__main__:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]
+build = ["pyinstaller>=6.11"]     # scripts\build-exe.ps1 (the standalone .exe folder)
 
 [build-system]
 requires = ["hatchling>=1.25"]

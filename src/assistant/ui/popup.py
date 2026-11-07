@@ -288,6 +288,8 @@ class PopupController(QObject):
     def show(self) -> None:
         if self.view is None:
             return
+        if self.ctx.state.game_exclusive and not self.model.get("expanded"):
+            return              # never over an exclusive-fullscreen game (could minimize it); voice answers only
         self._hide_timer.stop()
         if not self.view.isVisible():
             self._screen = self._pick_screen()

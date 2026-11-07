@@ -46,3 +46,37 @@ def test_second_instance_hands_over(home):
     finally:
         first.wait(timeout=30)
     assert first.returncode == 0
+
+
+def test_quit_stops_the_running_instance(home):
+    assert subprocess.run([sys.executable, "-m", "assistant", "--quit"], env=_env(home), timeout=30).returncode == 0
+    first = subprocess.Popen([sys.executable, "-m", "assistant", "--smoke-test", "40"], env=_env(home),
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        log = home / "logs" / "assistant.log"
+        deadline = time.time() + 20
+        while time.time() < deadline and not (log.exists() and "tray ready" in log.read_text(encoding="utf-8")):
+            time.sleep(0.1)
+        t0 = time.time()
+        res = subprocess.run([sys.executable, "-m", "assistant", "--quit"], env=_env(home),
+                             capture_output=True, text=True, timeout=40)
+        assert res.returncode == 0, res.stderr
+        assert first.wait(timeout=10) == 0
+        assert time.time() - t0 < 10                       # well before the 40 s smoke-test timer
+        assert "message from second instance: quit" in log.read_text(encoding="utf-8")
+    finally:
+        if first.poll() is None:
+            first.kill()
+
+
+def test_self_test_opens_every_window(tmp_path):
+    env = _env(tmp_path / "unused")                     # --self-test makes (and deletes) its own home
+    env.pop("ASSISTANT_HOME")
+    env["TMPDIR"] = str(tmp_path)
+    res = subprocess.run([sys.executable, "-m", "assistant", "--self-test"], env=env,
+                         capture_output=True, text=True, timeout=200)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "self-test passed" in res.stdout
+    assert "all 10 settings tabs load" in res.stdout
+    assert list(tmp_path.glob("assistant-selftest-*")) == []          # cleaned up
+    assert not (tmp_path / "unused").exists()

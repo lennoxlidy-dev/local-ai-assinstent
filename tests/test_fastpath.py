@@ -45,6 +45,7 @@ def fp():
     ("PC sperren", "power", {"action": "lock"}),
     ("switch to desktop 2", "desktop", {"action": "switch", "target": "2"}),
     ("wechsle zum nächsten Desktop", "desktop", {"action": "switch", "target": "next"}),
+    ("wechsle zu Desktop 1", "desktop", {"action": "switch", "target": "1"}),
     ("open spotify", "open_app", {"name": "Spotify"}),
     ("öffne den Editor", "open_app", {"name": "Notepad"}),
     ("mach Steam auf", "open_app", {"name": "Steam"}),

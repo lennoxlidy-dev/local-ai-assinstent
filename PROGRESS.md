@@ -12,14 +12,14 @@ Living status file. Read this first when continuing in a new session (together w
 | 4 | Voice: mic → wake word → VAD → STT → popup, then TTS; WAV test harness | ✅ done (real speech models tested end to end via WAV harness on CPU; mic/popup/hotkeys on Windows pending) |
 | 5 | Onboarding wizard + profile/memory | ✅ done (wizard logic, voice answers and calibration tested with real models; GUI rendered offscreen - Windows run pending) |
 | 6 | Settings/permissions GUI + history | ✅ done (all 10 tabs loaded and exercised offscreen; Windows run pending) |
-| 7 | Performance tuning, game mode, packaging (install.ps1/.bat/.exe), README | ⏳ next |
+| 7 | Performance tuning, game mode, packaging (install.ps1/.bat/.exe), README | ✅ done (benchmark run here on CPU; .exe built + self-tested on Linux; installer scripts, game-mode probe and GPU latency need a Windows run) |
 
-## Architecture (as built so far)
+## Architecture
 
 ```
 src/assistant/
-  __main__.py          entry point: tray (default) | --cli | --setup [--models ids] | --onboarding | --debug
-                       | --smoke-test N | --home DIR
+  __main__.py          entry point: tray (default) | --cli | --setup [--models auto|ids] | --onboarding | --debug
+                       | --smoke-test N | --self-test | --quit | --home DIR
                        | --say TEXT --out WAV [--lang --voice] | --voice-test WAV... [--speak-out WAV] [--fast]
   cli.py               text-mode debug CLI (":" commands; free text -> the assistant)
   core/
@@ -35,6 +35,7 @@ src/assistant/
     hardware.py        RAM/CPU (psutil, registry) + NVIDIA VRAM via NVML (ctypes) -> nvidia-smi fallback
     proc.py            run_hidden(): subprocesses with CREATE_NO_WINDOW (no console flashes)
     assistant.py       the brain: text -> fast path | LLM agent; context line, history, conversations, stop/cancel
+    gamemode.py        GameModeWatcher: fullscreen-game detection (classify) with hysteresis + manual override
   win/shell.py         AppUserModelID, per-monitor DPI awareness (CLI), open_path()
   ui/
     app.py             QApplication bootstrap, theme, config file watcher, single instance
@@ -53,6 +54,7 @@ src/assistant/
     qml/common/*.qml   shared controls: Btn, Card, SettingRow, ToggleSwitch, InputField, Dropdown, ValueSlider,
                        KeyField, Segmented, OptionRow, DangerBtn, Toggle
     theme.py           Look: the live colour palette (``look.colors``) for the QML windows
+    selftest.py        --self-test: compile every QML file, open wizard / settings (all tabs) / popup, report
     qtmodel.py         helper: QObject view-models with notifying properties for QML
   onboarding/
     questions.py       the 27 setup questions (EN/DE text, defaults, options, validation, apply -> config/policy/db)
@@ -112,14 +114,19 @@ src/assistant/
     hotkeys.py         RegisterHotKey thread: push-to-talk (press/hold), panic
     dwm.py             popup styling: acrylic blur, rounded clip, WS_EX_NOACTIVATE
     qos.py             EcoQoS for the always-on audio thread
+    fullscreen.py      foreground-window probe for game mode (monitor coverage, D3D exclusive, exe, 3D DLLs)
     backends.py        Windows implementations (pywin32, pyvda, pycaw, uiautomation, WinRT SMTC/OCR, mss,
                        send2trash IFileOperation, Everything SDK, SHGetKnownFolderPath)
     inputs.py          SendInput (fixed-width ctypes structs, unit-tested layout)
     com.py             per-thread COM init; WinRT worker thread (MTA + asyncio)
-tests/                 pytest (353 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
+tests/                 pytest (369 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
                        the real speech models - each skipped when not installed)
-bench/                 llm_bench.py + cases.py: GPU latency + tool-calling accuracy per model
-scripts/               dev-setup.ps1, setup-models.bat, run-tray.bat, run-debug.bat, run-cli.bat
+bench/                 llm_bench.py + cases.py: GPU latency + tool-calling accuracy per model;
+                       perf_bench.py: every performance target of the spec (idle, wake, STT, TTS, fast path, LLM)
+scripts/               dev-setup.ps1, setup-models.bat, run-tray.bat, run-debug.bat, run-cli.bat, perf-bench.bat,
+                       build-exe.ps1/.bat
+install.bat/.ps1       one-click per-user install/update; uninstall.ps1
+packaging/             assistant.spec (PyInstaller), launch.py (exe entry), make_icon.py -> assistant.ico
 ```
 
 ## Decisions & defaults (with reasons)
@@ -394,6 +401,67 @@ Milestone 6 decisions:
 - **Appearance tab**: theme, accent (swatches or hex), popup position (picked on a mini screen), fade time,
   acrylic on/off, and a "Show a test popup" button. Theme/accent changes restyle open windows immediately.
 
+Milestone 7 decisions:
+
+- **Measured, not guessed**: `bench/perf_bench.py` measures every target of the spec (results and table in
+  README → Performance; JSON in `%LOCALAPPDATA%\Assistant\bench\`). The stages were already logged as `TIMING`
+  lines; the benchmark's "usage" section summarizes those from real use.
+- **Idle tuning**: microphone blocks of 40 ms instead of 20 ms (the keyword spotter decodes ~320 ms chunks anyway;
+  -12 % idle CPU measured, no latency cost), the level meter's RMS is computed only when a window reads it (not
+  25x per second in the audio callback), and the 4 Hz wake-up that lets Ctrl+C work only runs with a console.
+  Result here: 0.95 % CPU (all cores) and ~205 MB for the whole tray app.
+- **Wake-word latency (~0.4 s vs. the 0.3 s target) is a model limit**: the detection comes 370-440 ms after the
+  name ends, for all 10 test voices. Neither block size nor trailing-blank settings change it; sherpa-onnx has no
+  smaller-chunk English keyword-spotting model. The popup appears 2-3 ms after the detection (pre-created
+  window), and recording starts with 1.6 s of pre-roll, so nothing is lost - it just appears a little later.
+- **Game mode** (automatic, `performance.game_mode_auto`, default on): every 3 s the foreground window is
+  checked. It counts as a game when it covers its monitor and (in this order) it's in `performance.games`; not a
+  browser/player/Office/chat/OBS/editor/RDP/launcher or in `performance.not_games`; and Windows reports exclusive
+  D3D fullscreen (`SHQueryUserNotificationState`), or the exe lives in a game library folder (Steam, Epic, GOG,
+  Xbox, Riot, Battle.net, EA, Ubisoft, Rockstar, …\Games\), or it has Direct3D/Vulkan/OpenGL loaded (psutil
+  memory maps, cached per process). Two hits in a row (~6 s) enter game mode, 20 s without the game leave it
+  (alt-tab tolerated). In game mode: llama-server stops (VRAM free), the voice stays on (CPU), simple commands
+  work, a question that needs the model loads it on demand and it is unloaded again 2 min after the last answer;
+  over an exclusive-fullscreen game the popup is not shown (it could minimize the game) - questions are spoken
+  and answered by voice. The tray toggle overrides: on = stays on until switched off; off during a game = that
+  game is ignored until it exits. A notification says when it switched and why.
+- **Install = uv + venv, per user, no admin** (`install.bat` → `install.ps1`): copies the app to
+  `%LOCALAPPDATA%\Programs\Assistant`, installs uv if missing, then `uv sync --frozen --no-dev --python 3.14`
+  (exactly the versions in `uv.lock`), then `--setup --models auto` (llama.cpp + only the model that suits the
+  GPU; the wizard can add the other one later), Start menu shortcuts, an "Installed apps" entry (HKCU) with
+  uninstall, and starts the app. Re-running it updates in place: it asks the running app to quit (`--quit`,
+  so llama-server and the logs close cleanly; anything left from the folder is ended), and keeps all data.
+  Chosen over a PyInstaller-only distribution because it avoids antivirus false positives on the bootloader,
+  updates are small, and it runs exactly the files that were tested.
+- **`uninstall.ps1`**: quits the app, removes autostart, shortcuts and the uninstall entry, optionally the data
+  (`%APPDATA%\Assistant`) and models/logs (`%LOCALAPPDATA%\Assistant`), then deletes the program folder.
+- **Standalone .exe** (`scripts\build-exe.bat`): PyInstaller one-folder build with two programs sharing one folder
+  (`Assistant.exe` without console, `AssistantCLI.exe` with console). Unused Qt parts are left out (other Quick
+  Controls styles - all QML uses the Basic style -, QML dialogs, test modules, Qt translations and the software
+  OpenGL DLL, since Qt Quick uses its software renderer): 372 → 326 MB on Linux. PyInstaller is pinned in the
+  `build` dependency group of `uv.lock`. The icon is generated from the tray orb (`packaging/make_icon.py`).
+- **`--self-test`**: compiles all 40 QML files and opens the setup wizard, the settings window (each tab) and
+  the popup chat with a temporary data folder (no downloads, no autostart change), collecting QML warnings and
+  errors; exit code 0/1. `build-exe.ps1` runs it on the fresh build; it's also the first troubleshooting step.
+- **`--quit`**: asks the running instance (same data folder) to quit via the single-instance socket and waits
+  until its lock is released.
+- Messages about missing models name the right command for the installed variant (`assistant-cli --setup` vs.
+  `AssistantCLI.exe --setup`) and the settings button.
+
+Benchmark results here (4-core Xeon VM, CPU only, `bench/perf_bench.py`):
+
+| Target | Measured | |
+|--------|----------|---|
+| Idle CPU < 2 % | 0.95 % of all cores (3.8 % of one core) | ✓ |
+| Idle RAM < 300 MB | ~205 MB whole tray app (126 MB voice pipeline alone) | ✓ |
+| Idle GPU unused | speech models on the CPU; GPU only for the LLM | ✓ |
+| Wake word → popup < 300 ms | 405 ms median after the end of the name (max 440), popup +2-3 ms | ✗ model limit |
+| End of speech → transcript < 500 ms | 284 ms (max 386) | ✓ |
+| Fast-path command < 1 s | 0.6 ms median, p95 1.6 ms, 30/30 local | ✓ |
+| LLM reply starts < 2 s | needs the GPU: `scripts\perf-bench.bat --llm` | ? |
+| Speech recognition model load (only after idle unload) | 5.1 s, in parallel with your speech | |
+| Answer → first spoken audio | 462 ms | |
+
 ## How to test
 
 ### Automated (any OS)
@@ -566,6 +634,34 @@ Permissions file: `%APPDATA%\Assistant\permissions.toml` (editable; invalid entr
 4. Please report: anything that doesn't save or doesn't take effect, layout problems at your scaling (125/150 %),
    and whether the dark title bar and the Segoe Fluent icons in the sidebar look right.
 
+### Milestone 7 on Windows (installer, performance, game mode, .exe)
+
+1. **Install**: unzip `assistant-m7.zip` (e.g. to Downloads), double-click `install.bat`. Watch the six steps;
+   it should end with "Started." and the setup wizard (or the tray icon if you set it up before - your existing
+   `%APPDATA%\Assistant` settings are used). Check: Start menu → *Assistant* (4 entries), *Settings → Apps →
+   Installed apps* shows "Assistant (local voice assistant)" with size and version. Run `install.bat` again
+   (= update): the running app quits by itself, nothing is lost. Options: `install.bat -SkipModels -NoLaunch`.
+2. **Self-test**: `"%LOCALAPPDATA%\Programs\Assistant\.venv\Scripts\assistant-cli.exe" --self-test` → seven
+   "ok" lines and "self-test passed" (windows flash briefly).
+3. **Performance**: `scripts\perf-bench.bat --llm` in the install folder (or `uv run python bench\perf_bench.py
+   --llm` in the source) → table + JSON. For the real idle numbers let the tray app sit idle for a few minutes,
+   then `scripts\perf-bench.bat --attach --idle-seconds 120 --skip wake,stt,tts,fastpath`. Please send both tables.
+4. **Game mode**: start a fullscreen game. After ~6 s a notification "Game mode (<game>.exe)"; Task Manager →
+   GPU memory drops (llama-server is gone). "Jarvis, set the volume to 20" works; a real question loads the model
+   (slower first answer) and 2 minutes later it is unloaded again. Alt-tab out and back within 20 s → stays in
+   game mode; quit the game → ~20 s later it ends and the model reloads. In an exclusive-fullscreen game no popup
+   appears (voice only). A YouTube video in fullscreen must *not* trigger it. Try the tray toggle (on/off by hand)
+   and *Settings → AI model → Always games / Never games*.
+5. **Standalone .exe** (in the source folder): `scripts\build-exe.bat -Zip` → builds `dist\Assistant\`, runs the
+   self-test, writes `dist\Assistant-0.1.0.zip`. Unzip it somewhere else and start `Assistant.exe` (quit the
+   installed one first - both use the same data); `AssistantCLI.exe --setup` and `AssistantCLI.exe` (debug CLI).
+   Note what SmartScreen / your antivirus say.
+6. **Uninstall**: *Installed apps → Assistant → Uninstall* (or Start menu → *Uninstall Assistant*): answer the
+   questions about data and models; afterwards the Start menu entries, the autostart entry
+   (`reg query HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v Assistant`) and the program folder are gone.
+7. Please report: anything the installer printed in yellow/red (+ `%TEMP%\assistant-install.log`), the two
+   benchmark tables, how game mode behaved in your games, and the .exe build result.
+
 ## Benchmark results (tool-calling accuracy, measured here on CPU - latency must be re-measured on the GPU)
 
 24 realistic EN/DE cases on a simulated PC (real agent loop, tool registry and permission gate; fake OS
@@ -618,5 +714,13 @@ action that no tool performed) and a fast-path "remember/merk dir" intent. Laten
 - M6 open points: the settings window was loaded and exercised offscreen (all tabs, both languages, both themes,
   no QML warnings; every action covered by tests) but has not run on Windows yet. ~53 MB stay resident after
   closing it (libraries + Qt caches, not growing); a separate process would be needed to give that back too.
-- Next: M7 - tuning against the performance targets, fullscreen-game detection for game mode, one-click
-  installer (install.ps1 + .bat), .exe build, README with troubleshooting.
+- M7 open points: `install.ps1`, `uninstall.ps1` and `build-exe.ps1` were written for Windows PowerShell 5.1
+  and reviewed by hand, but could not be run or even syntax-checked by PowerShell here (no PowerShell in the
+  container, and running a downloaded PowerShell build was not allowed) - expect possible small fixes on the
+  first run. The PyInstaller build was built and passed `--self-test` on Linux only; the Windows build has the
+  same spec (with the Windows-only modules added). Game-mode detection is Windows-only code (type-checked;
+  classification and hysteresis unit-tested with a fake probe). The wake word reacts ~0.4 s after the name
+  (target 0.3 s; model limit). The LLM first-token target (< 2 s) still has to be measured on the RTX 4070.
+  The program is not code-signed (SmartScreen warning for the .exe; the uv/Python install avoids it).
+- All seven milestones are built. Next would be the first real-Windows round: run the per-milestone checklists
+  above and fix what comes up.

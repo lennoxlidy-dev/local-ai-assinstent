@@ -197,6 +197,8 @@ DESKTOP = [P(rf"(switch|go|move|change|jump) to (the )?(?P<t>{_DESK_WORDS})(st|n
            P(r"(wechsle|wechsel|geh(e)?|spring(e)?) (zum |zu |auf )?(den |dem |das )?(?P<t>nächsten|vorherigen|ersten|"
              r"zweiten|dritten|vierten|assistenten|assistant|\d+) desktop"),
            P(r"(zu |auf |zum )?desktop (?P<t>\d+|nächster|vorheriger|assistent|assistant)"),
+           P(r"(wechsle|wechsel|geh(e)?|spring(e)?) (zum |zu |auf )?(den |dem |das )?desktop "
+             r"(?P<t>\d+|nächster|vorheriger|assistent|assistant)"),
            P(r"(?P<t>nächster|vorheriger) desktop")]
 _DESK_MAP = {"nächsten": "next", "nächster": "next", "vorherigen": "previous", "vorheriger": "previous",
              "ersten": "1", "first": "1", "zweiten": "2", "second": "2", "dritten": "3", "third": "3",

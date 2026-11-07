@@ -92,6 +92,18 @@ ScrollView {
                 ToggleSwitch { checked: tab.c["performance.game_mode_auto"] === true; onToggled: function(on) { tab.set("performance.game_mode_auto", on) } }
             }
             SettingRow {
+                visible: tab.c["performance.game_mode_auto"] === true
+                label: tab.tr.games; hint: tab.tr.games_hint
+                InputField { value: (tab.c["performance.games"] || []).join(", ")
+                             onCommitted: function(t) { tab.set("performance.games", t.split(",").map(function(x) { return x.trim() }).filter(function(x) { return x.length }) ) } }
+            }
+            SettingRow {
+                visible: tab.c["performance.game_mode_auto"] === true
+                label: tab.tr.not_games
+                InputField { value: (tab.c["performance.not_games"] || []).join(", ")
+                             onCommitted: function(t) { tab.set("performance.not_games", t.split(",").map(function(x) { return x.trim() }).filter(function(x) { return x.length }) ) } }
+            }
+            SettingRow {
                 label: tab.tr.eco_qos; separator: false
                 ToggleSwitch { checked: tab.c["performance.eco_qos"] === true; onToggled: function(on) { tab.set("performance.eco_qos", on) } }
             }

@@ -22,7 +22,9 @@ class Phase(StrEnum):
 @dataclass
 class _Snapshot:
     paused: bool = False         # user paused listening (tray)
-    game_mode: bool = False      # VRAM freed, wake word may be off
+    game_mode: bool = False      # VRAM freed (language model unloaded while a game runs)
+    game_reason: str = ""        # "manual" or the detected game's program name
+    game_exclusive: bool = False # the game runs in exclusive fullscreen: no popup over it
     phase: Phase = Phase.IDLE
     voice_ready: bool = False    # mic + wake word pipeline is running (milestone 4)
     llm_ready: bool = False      # llama.cpp server healthy (milestone 3)

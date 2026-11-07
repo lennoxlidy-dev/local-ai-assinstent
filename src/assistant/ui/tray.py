@@ -108,7 +108,8 @@ class TrayController(QObject):
         if s.paused:
             return f"{name} — paused"
         if s.game_mode:
-            return f"{name} — game mode"
+            game = s.game_reason if s.game_reason and s.game_reason != "manual" else ""
+            return f"{name} — game mode" + (f" ({game})" if game else "")
         extra = f" ({self.llm_state})" if getattr(self, "llm_state", "") else ""
         if s.voice_ready:
             return f"{name} — listening for “{name}”{extra}"

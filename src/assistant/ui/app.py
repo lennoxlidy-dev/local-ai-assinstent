@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
+import os
+import shutil
 import signal
 import sys
+import tempfile
 import threading
 import time
 from typing import Any
@@ -44,6 +47,7 @@ class TrayApp(QObject):
     _open_chat = Signal()
     _hotkeys_changed = Signal()
     _setup_event = Signal(object)
+    _game_unload = Signal(bool)
 
     def __init__(self, ctx: AppContext, app: QApplication, *, autostarted: bool = False, open_setup: bool = False):
         super().__init__()
@@ -77,6 +81,11 @@ class TrayApp(QObject):
         self._open_chat.connect(self.ask_dialog)
         self._hotkeys_changed.connect(self._register_hotkeys)
         self._setup_event.connect(self._on_setup_event)
+        self.game_watcher: Any = None
+        self._unload_timer = QTimer(self, singleShot=True, interval=120_000)
+        self._unload_timer.timeout.connect(self._unload_after_game_request)
+        self._game_unload.connect(self._game_unload_timer)
+        ctx.bus.subscribe("assistant.reply", self._on_reply)
         ctx.bus.subscribe(Topic.STATE_CHANGED, self._on_state_changed)
         ctx.bus.subscribe(Topic.CONFIG_CHANGED, self._on_config_changed)
         ctx.bus.subscribe(Topic.NOTIFY, self._on_notify)
@@ -94,14 +103,40 @@ class TrayApp(QObject):
         llm = self.llm
         if changed["game_mode"]:
             threading.Thread(target=llm.stop, name="llm-stop", daemon=True).start()
-            self.ctx.bus.publish(Topic.NOTIFY, title="Game mode", message="Language model unloaded - VRAM is free.")
+            game = self.ctx.state.game_reason
+            what = f" ({game})" if game and game != "manual" else ""
+            self.ctx.bus.publish(Topic.NOTIFY, title="Game mode" + what,
+                                 message="Language model unloaded - the graphics card is free. Simple commands "
+                                         "still work; bigger questions load it on demand.")
         else:
-            llm.start_background()
+            self._game_unload.emit(False)
+            self._maybe_start_llm()
+
+    def _on_reply(self, event: Event) -> None:
+        """In game mode the model is only loaded on demand - unload it again after a quiet spell."""
+        if event.data.get("via") == "llm" and self.ctx.state.game_mode:
+            self._game_unload.emit(True)
+
+    def _game_unload_timer(self, start: bool) -> None:
+        if start:
+            self._unload_timer.start()
+        else:
+            self._unload_timer.stop()
+
+    def _unload_after_game_request(self) -> None:
+        if self.ctx.state.game_mode and self.llm is not None and self.llm.ready:
+            log.info("game mode: unloading the language model again")
+            threading.Thread(target=self.llm.stop, name="llm-stop", daemon=True).start()
 
     def _on_config_changed(self, event: Event) -> None:
         keys = event.data.get("keys", [])
         if any(k.startswith("hotkeys.") or k == "voice.push_to_talk_mode" for k in keys):
             self._hotkeys_changed.emit()
+        if "performance.game_mode_auto" in keys and self.game_watcher is not None:
+            if self.ctx.config.data.performance.game_mode_auto:
+                self.game_watcher.start()
+            else:
+                self.game_watcher.stop()
 
     def start(self) -> None:
         self.tray.show()
@@ -127,6 +162,7 @@ class TrayApp(QObject):
         self.tools = build_tool_system(self.ctx, confirmer=self.confirmer)
         self.llm = LlmService(self.ctx)
         self.assistant = Assistant(self.ctx, self.tools, self.llm)
+        self._start_game_watcher()
         if not self.ctx.config.data.general.onboarding_done or self.force_setup:
             log.info("assistant ready; opening the setup wizard")
             self.open_setup(first_run=not self.ctx.config.data.general.onboarding_done)
@@ -135,6 +171,15 @@ class TrayApp(QObject):
         log.info("assistant ready (LLM loading in the background)")
         threading.Thread(target=self._init_voice, name="voice-init", daemon=True).start()
         self._resume_downloads()
+
+    def _start_game_watcher(self) -> None:
+        from ..core.gamemode import GameModeWatcher
+
+        if sys.platform != "win32" or self.game_watcher is not None:
+            return
+        self.game_watcher = GameModeWatcher(self.ctx)
+        if self.ctx.config.data.performance.game_mode_auto:
+            self.game_watcher.start()
 
     # ------------------------------------------------------------------ setup wizard + downloads
     def open_setup(self, first_run: bool = False) -> None:
@@ -388,6 +433,8 @@ class TrayApp(QObject):
         log.info("message from second instance: %s", msg)
         if msg in ("show", "settings"):
             self.open_settings()
+        elif msg == "quit":                 # --quit (the installer before an update, the uninstaller)
+            self.quit()
 
     def open_settings(self, tab: str = "") -> None:
         """The settings window: created on demand, freed again when it is closed."""
@@ -449,6 +496,8 @@ class TrayApp(QObject):
         self.ctx.bus.publish(Topic.SHUTDOWN)
         if self.downloads is not None:
             self.downloads.cancel()
+        if self.game_watcher is not None:
+            self.game_watcher.close()
         if self.setup_window is not None:
             self.setup_window.voice.close()
         if self.settings_window is not None:
@@ -469,9 +518,18 @@ class TrayApp(QObject):
 
 
 def run_tray(*, home: str | None = None, autostarted: bool = False, debug: bool = False,
-             smoke_test_s: float | None = None, open_setup: bool = False) -> int:
+             smoke_test_s: float | None = None, open_setup: bool = False, self_test: bool = False) -> int:
+    temp_home = None
+    if self_test:
+        os.environ["ASSISTANT_NO_DOWNLOADS"] = "1"          # a test never downloads anything
+        if home is None:
+            temp_home = home = tempfile.mkdtemp(prefix="assistant-selftest-")
     set_app_user_model_id(APP_USER_MODEL_ID)
     ctx = bootstrap("tray", home=home, console_log=debug, console_level="DEBUG" if debug else "INFO")
+    if self_test:
+        from ..core.autostart import Autostart, MemoryBackend
+
+        ctx.autostart = Autostart(backend=MemoryBackend())  # ... and never touches the login items
     qInstallMessageHandler(_qt_message)
 
     QApplication.setApplicationName(APP_ID)
@@ -491,16 +549,34 @@ def run_tray(*, home: str | None = None, autostarted: bool = False, debug: bool 
     tray_app.start()
 
     # Let Ctrl+C work when started from a console (Python only sees signals between Qt events).
+    # Without a console (pythonw / the .exe) there is no Ctrl+C, so no need to wake up 4x a second.
     signal.signal(signal.SIGINT, lambda *_: tray_app.quit())
     pulse = QTimer(interval=250)
     pulse.timeout.connect(lambda: None)
-    pulse.start()
+    if sys.stdin is not None and sys.stdin.isatty():
+        pulse.start()
 
     if smoke_test_s is not None:
         QTimer.singleShot(int(smoke_test_s * 1000), tray_app.quit)
         log.info("smoke test: quitting in %.1fs", smoke_test_s)
+    test = None
+    if self_test:
+        from .selftest import SelfTest
+
+        def out(line: str) -> None:
+            print(line, flush=True)
+            log.info("self-test: %s", line.strip())
+
+        test = SelfTest(tray_app, out=out)
+        test.start()
+        QTimer.singleShot(180_000, lambda: test.abort("timed out after 3 minutes"))
 
     code = app.exec()
     instance.release()
+    if test is not None:
+        code = test.result
     log.info("exit code %d", code)
+    if temp_home is not None:
+        logging.shutdown()                                  # close the log file before deleting it
+        shutil.rmtree(temp_home, ignore_errors=True)
     return code

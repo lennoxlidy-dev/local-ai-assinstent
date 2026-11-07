@@ -181,6 +181,8 @@ class AppearanceConfig:
 @dataclass
 class PerformanceConfig:
     game_mode_auto: bool = opt(True, doc="Enter game mode when a fullscreen game is detected.")
+    games: list[str] = opt([], doc="Programs that are always games (exe names, e.g. 'eldenring.exe').")
+    not_games: list[str] = opt([], doc="Fullscreen programs that are never games (exe names).")
     eco_qos: bool = opt(True, doc="Run the idle listening loop as an efficiency (EcoQoS) thread.")
 
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -26,6 +27,12 @@ from .server import LlamaServer, ServerError, ServerOptions, ServerState
 from .setup import current_server
 
 log = logging.getLogger(__name__)
+
+
+def setup_hint() -> str:
+    """Where to get missing models, named the way this copy was installed."""
+    cli = "AssistantCLI.exe --setup" if getattr(sys, "frozen", False) else "assistant-cli --setup"
+    return f"Settings > Model > Download missing models, or run: {cli}"
 
 
 class LlmUnavailable(LLMError):
@@ -99,7 +106,7 @@ class LlmService:
         c = self.ctx.config.data.llm
         exe = self._exe_override or (Path(c.server_path) if c.server_path else current_server(self.ctx.paths.bin_dir))
         if exe is None:
-            raise LlmUnavailable("llama.cpp is not installed yet (run: assistant-cli --setup)")
+            raise LlmUnavailable(f"llama.cpp is not installed yet ({setup_hint()})")
         weights, mmproj = model_files(spec, self.ctx.paths.models_dir, vision=c.vision)
         if mmproj is not None and not mmproj.exists():
             mmproj = None
@@ -129,7 +136,7 @@ class LlmService:
         with self._lock:
             spec = self.spec or self.select()
             if not is_installed(spec, self.ctx.paths.models_dir, vision=False):
-                raise LlmUnavailable(f"model {spec.id} is not downloaded yet (run: assistant-cli --setup)")
+                raise LlmUnavailable(f"model {spec.id} is not downloaded yet ({setup_hint()})")
             if self.server is None:
                 self.server = LlamaServer(self._options(spec), self.ctx.paths.logs_dir, self._on_state)
             try:

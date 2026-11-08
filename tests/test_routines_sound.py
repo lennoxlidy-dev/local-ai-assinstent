@@ -132,13 +132,13 @@ class _Mci:
         return ""
 
 
-def _session(length, *, until_at=None, min_s=0.0, stop_at=None, broken=False):
+def _session(length, *, until_at=None, seconds=0.0, stop_at=None, broken=False):
     from assistant.audio.mci import play_session
 
     clock = _Clock()
     mci = _Mci(length, clock, broken)
     until = (lambda: clock.t >= until_at) if until_at is not None else None
-    play_session(mci, "s1", "C:\\x.wav", stop=_Ticks(clock, stop_at), until=until, min_s=min_s, clock=clock)
+    play_session(mci, "s1", "C:\\x.wav", stop=_Ticks(clock, stop_at), until=until, seconds=seconds, clock=clock)
     return mci, clock.t
 
 
@@ -147,9 +147,17 @@ def test_a_sound_plays_once():
     assert mci.plays == 1 and 3.0 <= end < 3.3 and mci.closed and mci.volumes == []
 
 
-def test_a_minimum_time_repeats_a_short_sound():
-    mci, end = _session(3.0, min_s=7.0)
-    assert mci.plays == 3 and 9.0 <= end < 9.5          # 3 rounds: it finishes the last one, no cut-off
+def test_a_set_time_repeats_a_short_sound():
+    mci, end = _session(3.0, seconds=7.0)
+    assert mci.plays == 3 and 7.0 <= end < 7.3          # 2 1/3 rounds: exactly 7 s, the end faded out
+    assert mci.volumes == [900, 800, 700, 600, 500, 400, 300, 200, 100, 0]
+
+
+def test_a_set_time_cuts_a_long_sound():
+    """The report: "Highway to Hell" (208 s) with 60 s set played the whole song - it must stop at 60 s."""
+    mci, end = _session(208.4, seconds=60.0)
+    assert mci.plays == 1 and 60.0 <= end < 60.3 and mci.closed
+    assert mci.volumes == [900, 800, 700, 600, 500, 400, 300, 200, 100, 0]       # faded out over the last second
 
 
 def test_until_the_routine_is_done_repeats_then_fades_out():
@@ -159,8 +167,8 @@ def test_until_the_routine_is_done_repeats_then_fades_out():
 
 
 def test_until_done_still_keeps_the_minimum_time():
-    mci, end = _session(10.0, until_at=2.0, min_s=5.0)
-    assert mci.plays == 1 and 6.0 <= end < 6.3 and mci.volumes[-1] == 0
+    mci, end = _session(10.0, until_at=2.0, seconds=5.0)
+    assert mci.plays == 1 and 5.0 <= end < 5.3 and mci.volumes[-1] == 0      # done at 2 s - it ends at 5 s
 
 
 def test_stop_ends_a_sound_at_once():
@@ -169,22 +177,34 @@ def test_stop_ends_a_sound_at_once():
 
 
 def test_a_sound_that_never_plays_is_not_repeated():
-    mci, end = _session(3.0, min_s=30.0, broken=True)
+    mci, end = _session(3.0, seconds=30.0, broken=True)
     assert mci.plays == 1 and end < 2.0 and mci.closed
 
 
 # ---------------------------------------------------------------------- the step's options in a routine
-def test_until_done_and_minimum_reach_the_player(ts):
+def test_until_done_and_the_time_reach_the_player(ts):
     system, p, _conf, home = ts
     intro = _music(home, "intro.wav")
     system.services["routines"].save(Routine("Gaming mode", [
-        {"tool": "play_sound", "args": {"path": str(intro), "until_done": True, "min_seconds": 8}},
+        {"tool": "play_sound", "args": {"path": str(intro), "until_done": True, "seconds": 8}},
         {"tool": "open_app", "args": {"name": "Steam"}}]))
     a = Assistant(system.ctx, system, None)
     assert a.handle("gaming mode").ok
     opts = p.sound.options[-1]
-    assert opts["min_s"] == 8.0 and opts["until"]() is True       # the routine is done -> may end now
+    assert opts["seconds"] == 8.0 and opts["until"]() is True     # the routine is done -> may end now
     assert not system.invoke("play_sound", {"path": str(intro), "wait": True, "until_done": True}, Task()).ok
+    r = system.invoke("play_sound", {"path": str(intro), "seconds": 60}, Task())
+    assert r.ok and r.text == "Playing intro.wav for 60 s." and p.sound.options[-1]["until"] is None
+
+
+def test_a_routine_from_before_plays_its_minimum_as_the_time(ts):
+    """Up to 0.1.9 the time was stored as "min_seconds" (meant as "play 60 s of the song"): read the same way."""
+    system, p, _conf, home = ts
+    intro = _music(home, "song.mp3")
+    system.services["routines"].save(Routine("Gaming mode", [
+        {"tool": "play_sound", "args": {"path": str(intro), "min_seconds": 60}}]))
+    assert Assistant(system.ctx, system, None).handle("gaming mode").ok
+    assert p.sound.options[-1]["seconds"] == 60.0 and p.sound.options[-1]["until"] is None
 
 
 def test_a_routine_can_check_drivers_and_say_the_result(ts):

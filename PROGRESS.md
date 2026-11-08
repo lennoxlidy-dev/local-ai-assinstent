@@ -119,7 +119,7 @@ src/assistant/
                        send2trash IFileOperation, Everything SDK, SHGetKnownFolderPath)
     inputs.py          SendInput (fixed-width ctypes structs, unit-tested layout)
     com.py             per-thread COM init; WinRT worker thread (MTA + asyncio)
-tests/                 pytest (448 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
+tests/                 pytest (451 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
                        the real speech models - each skipped when not installed)
 bench/                 llm_bench.py + cases.py: GPU latency + tool-calling accuracy per model;
                        perf_bench.py: every performance target of the spec (idle, wake, STT, TTS, fast path, LLM)
@@ -613,6 +613,28 @@ Version 0.1.9 (feedback: "the at least thing on play a sound does not work"):
 - Tests: an "at least" typed and the window closed at once is stored; an unfinished step shows "⚠ Not saved: …" and
   no error; the length shown for a real MP3; the existing editor test now relies on the auto-save (no Save click);
   name clashes (also quiet), case-only rename, a template added twice from the editor.
+
+Version 0.1.10 (feedback with the log: "it played the whole song it should only have played 60s"):
+
+- The log showed `ACDC - Highway to Hell.mp3: 208.4 s long, at least 60 s -> played 208.4 s`: the minimum worked as
+  built, but the wish was a **playing time** - "60 s of the song". So the number now means how long the sound plays:
+  **play for … s** - a longer sound fades out so that it ends exactly then (1 s fade; a quarter of the time for short
+  times), a shorter one starts again until then (its last round fades the same way); empty = the whole sound once.
+  With "keeps playing until the routine is done" it stays **at least … s** (and ends at that time when the routine is
+  done sooner: the fade now ends there instead of starting there).
+- The step's arg is `seconds`; `min_seconds` (0.1.6-0.1.9) is read as the same value, so existing routines - like the
+  reported one - play 60 s without being edited again. The editor writes `seconds`.
+- Editor: the field's label follows the mode ("play for" / "at least"), the field is empty for "the whole sound", and
+  a line under the fields says in words what will happen with this file ("Plays the first 60 s, then fades out.",
+  "Repeats the sound until 60 s are up, then fades out.", "Plays the whole sound once (208.4 s)." …), live while
+  typing. The mode names are "Plays while the next steps run" / "Plays, then the next step" / "Keeps playing until
+  the routine is done" ("plays once" no longer fits a sound that may repeat).
+- Engine (`play_track`, `audio/mci.py`): exact to the sample - blocks end where the fade starts and the fade ends at the
+  set time. A set time shorter than the sound decodes only that part (one read call, as before; verified on a 3-minute
+  VBR MP3: exactly 60.000 s, the first 59 s identical to ffmpeg's decoding, then the fade).
+- Log: `sound X: 208.4 s long, for 60 s -> played 60.0 s`; the step says "Playing X for 60 s."
+- Tests: a long sound cut at 60 s (engine + MCI), a short one repeated to an exact time, until-done ending at its
+  minimum or after the routine, an old `min_seconds` routine, the editor's label, empty field and hints.
 
 ## How to test
 

@@ -523,7 +523,7 @@ class WinSound:
         return out.value
 
     def play(self, path: str, wait: bool, cancelled: Callable[[], bool] | None = None, *,
-             until: Callable[[], bool] | None = None, min_s: float = 0.0, volume: float = 1.0,
+             until: Callable[[], bool] | None = None, seconds: float = 0.0, volume: float = 1.0,
              speaking: Callable[[], bool] | None = None, duck_level: Callable[[], float] | None = None) -> None:
         from ..audio.mci import play_session
 
@@ -535,7 +535,7 @@ class WinSound:
 
         def run() -> None:
             try:
-                play_session(self._cmd, alias, path, stop=stop, cancelled=cancelled, until=until, min_s=min_s,
+                play_session(self._cmd, alias, path, stop=stop, cancelled=cancelled, until=until, seconds=seconds,
                              volume=volume, speaking=speaking, duck_level=duck_level, max_s=self.MAX_S)
             except OSError as e:
                 errors.append(e)

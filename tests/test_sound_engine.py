@@ -121,10 +121,24 @@ def test_other_formats_play(out, tmp_path, ext):
     assert 0.95 <= secs(out.instances[0]) <= 1.1
 
 
-def test_an_mp3_repeats_for_the_minimum_time(out, tmp_path):
-    SoundEngine().play(mp3(tmp_path, "tone_44k_stereo_1s.mp3"), wait=True, min_s=3.5)
+def test_a_short_mp3_repeats_for_the_set_time(out, tmp_path):
+    SoundEngine().play(mp3(tmp_path, "tone_44k_stereo_1s.mp3"), wait=True, seconds=3.5)
     s = out.instances[0]
-    assert 3.9 <= secs(s) <= 4.3 and loud_everywhere(s.audio)   # 4 rounds, the last one to its end
+    assert secs(s) == pytest.approx(3.5, abs=0.001)               # exactly the set time: 3.5 rounds
+    assert loud_everywhere(s.audio[: int(2.5 * RATE)])
+    assert float(np.abs(s.audio[-RATE // 50:]).max()) < 0.05    # it fades out to the end
+
+
+def test_a_long_song_stops_at_the_set_time(out, tmp_path):
+    """The report: a 208 s song with 60 s played the whole song. (Here: 2 s of tone, 1 s wanted.)"""
+    SoundEngine().play(mp3(tmp_path, "tone_44k_stereo_2s.mp3"), wait=True, seconds=1.0)
+    s = out.instances[0]
+    assert secs(s) == pytest.approx(1.0, abs=0.001) and s.stopped and not s.aborted
+    a = np.abs(s.audio[:, 0])
+    peak = float(a[: RATE // 2].max())
+    assert float(a[int(0.6 * RATE):int(0.7 * RATE)].max()) == pytest.approx(peak, rel=0.05)   # full level, then
+    assert float(a[int(0.85 * RATE):int(0.95 * RATE)].max()) < peak * 0.65   # fading (a 1 s time: the last 0.25 s)
+    assert float(a[-RATE // 50:].max()) < peak * 0.1                        # ... to almost nothing at 1.0 s
 
 
 def test_until_the_routine_is_done_with_an_mp3(out, tmp_path):
@@ -163,10 +177,10 @@ def test_other_formats_and_broken_files_go_to_the_fallback(out, tmp_path):
         def __init__(self):
             self.calls, self.stopped = [], 0
 
-        def play(self, path, wait, cancelled=None, *, until=None, min_s=0.0, volume=1.0, speaking=None,
+        def play(self, path, wait, cancelled=None, *, until=None, seconds=0.0, volume=1.0, speaking=None,
                  duck_level=None):
             assert callable(speaking) and callable(duck_level)          # ducking reaches the MCI player too
-            self.calls.append((path, wait, min_s))
+            self.calls.append((path, wait, seconds))
 
         def stop_all(self):
             self.stopped += 1
@@ -181,7 +195,7 @@ def test_other_formats_and_broken_files_go_to_the_fallback(out, tmp_path):
         SoundEngine().play(str(broken), wait=False)
     mci = Mci()
     eng = SoundEngine(fallback=mci)
-    eng.play(str(wma), wait=True, min_s=5)
+    eng.play(str(wma), wait=True, seconds=5)
     eng.play(str(broken), wait=False)
     eng.stop_all()
     assert mci.calls == [(str(wma), True, 5), (str(broken), False, 0.0)] and mci.stopped == 1
@@ -210,8 +224,8 @@ def _source(seconds, rate=RATE):
     return read, rewind
 
 
-def _run(seconds, *, until_after=None, min_s=0.0, stop_after=None):
-    read, rewind = _source(seconds)
+def _run(file_s, *, until_after=None, seconds=0.0, stop_after=None):
+    read, rewind = _source(file_s)
     written, stop = [], threading.Event()
 
     def write(block):
@@ -223,14 +237,21 @@ def _run(seconds, *, until_after=None, min_s=0.0, stop_after=None):
     def until():
         return sum(len(b) for b in written) / RATE >= until_after
 
-    played = play_track(read, rewind, write, RATE, stop=stop, min_s=min_s,
+    played = play_track(read, rewind, write, RATE, stop=stop, seconds=seconds,
                         until=until if until_after is not None else None)
     return played, np.concatenate(written)[:, 0] if written else np.zeros(0)
 
 
-def test_play_track_once_and_minimum():
-    assert _run(1.0)[0] == pytest.approx(1.0)
-    assert _run(1.0, min_s=2.5)[0] == pytest.approx(3.0)     # whole rounds
+def test_play_track_once_and_for_a_set_time():
+    assert _run(1.0)[0] == pytest.approx(1.0)                # no time set: once
+    played, audio = _run(1.0, seconds=2.5)                   # shorter: repeats, exactly 2.5 s
+    assert played == pytest.approx(2.5) and len(audio) == int(2.5 * RATE)
+    assert np.all(audio[: int(1.8 * RATE)] == 1.0)           # (the fade: the last 0.625 s = a quarter)
+    played, audio = _run(208.0, seconds=60.0)                # longer: cut at exactly 60 s, with a 1 s fade
+    assert played == pytest.approx(60.0) and len(audio) == 60 * RATE
+    fade = audio[-RATE:]
+    assert np.all(audio[: 59 * RATE] == 1.0) and fade[0] > 0.99 and fade[-1] < 0.001
+    assert np.all(np.diff(fade) <= 1e-6)                     # going down smoothly
 
 
 def test_play_track_until_done_fades_out():
@@ -238,13 +259,15 @@ def test_play_track_until_done_fades_out():
     assert 3.4 <= played <= 3.6                             # repeat until 2.5 s, then a 1 s fade
     fade = audio[-RATE:]
     assert fade[0] > 0.9 and fade[-1] < 0.01 and np.all(np.diff(fade) <= 1e-6)
-    played, _ = _run(10.0, until_after=0.0, min_s=1.5)       # done at once, but at least 1.5 s
-    assert 2.4 <= played <= 2.6
+    played, _ = _run(10.0, until_after=0.0, seconds=1.5)     # done at once, but at least 1.5 s: ends at 1.5 s
+    assert 1.5 <= played <= 1.55
+    played, _ = _run(1.0, until_after=4.2, seconds=2.0)      # done later than the minimum: 4.2 s + the fade
+    assert 5.2 <= played <= 5.3
 
 
 def test_play_track_stop_and_empty_files():
     assert _run(10.0, stop_after=0.5)[0] < 0.6
-    assert _run(0.0, min_s=5.0)[0] == 0.0                   # an empty file isn't repeated forever
+    assert _run(0.0, seconds=5.0)[0] == 0.0                 # an empty file isn't repeated forever
     assert BLOCK == 2048
 
 
@@ -283,7 +306,7 @@ def test_a_sound_ducks_under_the_voice(out, tmp_path):
 
     FakeStream.write = write
     try:
-        eng.play(mp3(tmp_path, "tone_44k_stereo_1s.mp3"), wait=True, min_s=3.0, volume=0.8)
+        eng.play(mp3(tmp_path, "tone_44k_stereo_1s.mp3"), wait=True, seconds=4.0, volume=0.8)
     finally:
         FakeStream.write = orig
     a = out.instances[0].audio[:, 0]

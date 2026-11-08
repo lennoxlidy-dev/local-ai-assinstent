@@ -62,14 +62,18 @@ def _run_sound(a: dict[str, Any], ctx: ToolContext, plan: Plan) -> ToolResult:
     p = Path(ctx.path(a["path"]).path)
     if not p.is_file():
         raise ToolError(f"The sound file {p} doesn't exist (any more).")
-    wait, until_done, min_s = bool(a.get("wait")), bool(a.get("until_done")), float(a.get("min_seconds") or 0)
+    from ..audio.sound import how_long
+
+    wait, until_done = bool(a.get("wait")), bool(a.get("until_done"))
+    # how long: "seconds" - or "min_seconds", its name up to 0.1.9 (it was meant the same way: "play 60 s" of a song)
+    secs = float(a.get("seconds") or a.get("min_seconds") or 0)
     token, finished = ctx.task.cancel, ctx.task.finished
     volume = int(a.get("volume") or 100) / 100
     ctx.platform.sound.play(str(p), wait, (lambda: token.cancelled) if wait else None,
-                            until=finished.is_set if until_done else None, min_s=min_s, volume=volume)
-    how = (" until the routine is done" if until_done else "") + (f" (at least {min_s:g} s)" if min_s else "")
-    return ToolResult(True, (f"Played {p.name}." if wait else f"Playing {p.name}") + (how if not wait else "")
-                      + ("" if wait else "."))
+                            until=finished.is_set if until_done else None, seconds=secs, volume=volume)
+    how = how_long(until_done, secs)
+    return ToolResult(True, (f"Played {p.name}" if wait else f"Playing {p.name}")
+                      + ("" if how == "once" else " " + how) + ".")
 
 
 def pick_play_button(elements: list[UiElement]) -> UiElement | None:
@@ -151,7 +155,9 @@ def register(reg: ToolRegistry) -> None:
         obj(("path",), path=Str("The sound file", min_len=1, max_len=400),
             wait=Bool("Wait until the sound has finished before the next step"),
             until_done=Bool("Keep playing (repeating) until the routine is done, then fade out"),
-            min_seconds=Int("Play at least this many seconds (a shorter sound repeats)", min=0, max=600),
+            seconds=Int("Play for this many seconds: a longer sound fades out then, a shorter one repeats. With "
+                        "until_done: at least this long", min=0, max=600),
+            min_seconds=Int("Older name of seconds (read the same way)", min=0, max=600),
             volume=Int("Volume in percent (it is lowered further while the assistant talks)", min=5, max=100)),
         "media", _plan_sound, _run_sound, llm=False))
 

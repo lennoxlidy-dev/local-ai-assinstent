@@ -376,13 +376,17 @@ def test_routine_editor_sound_and_announcement_steps(sw, tmp_path):
     end = next(i for i in visual(tab) if i.objectName() == "soundEnd" and i.isVisible())
     QMetaObject.invokeMethod(end, "chosen", Q_ARG("QVariant", "until"))
     _pump(3)
-    minimum = next(i for i in visual(tab) if i.objectName() == "soundMin" and i.isVisible())
+    label = next(i for i in visual(tab) if i.objectName() == "soundSecondsLabel" and i.isVisible())
+    assert label.property("text") == "at least"                  # (with "until the routine is done")
+    minimum = next(i for i in visual(tab) if i.objectName() == "soundSeconds" and i.isVisible())
+    assert minimum.property("text") == ""                         # no time set yet
     minimum.forceActiveFocus()
-    minimum.setProperty("cursorPosition", 1)
     for kind in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
         QGuiApplication.sendEvent(w.window, QKeyEvent(kind, Qt.Key.Key_8, Qt.KeyboardModifier.NoModifier, "8"))
     _pump(3)
-    assert shiboken6.isValid(minimum) and minimum.property("text") == "08"
+    assert shiboken6.isValid(minimum) and minimum.property("text") == "8"
+    hint = next(i for i in visual(tab) if i.objectName() == "soundHint" and i.isVisible())
+    assert hint.property("text") == "Repeats until the routine's last step is done - at least 8 s - then fades out."
     vol = next(i for i in visual(tab) if i.objectName() == "soundVolume" and i.isVisible())    # volume 60 %
     vol.forceActiveFocus()
     for key, mod, ch in ((Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier, ""),
@@ -394,7 +398,7 @@ def test_routine_editor_sound_and_announcement_steps(sw, tmp_path):
     autosaved()
     steps = system.services["routines"].get("Gaming mode").steps
     assert steps[0] == {"tool": "say", "args": {"text": "Gaming mode on!!"}}
-    assert steps[1] == {"tool": "play_sound", "args": {"path": str(intro), "until_done": True, "min_seconds": 8,
+    assert steps[1] == {"tool": "play_sound", "args": {"path": str(intro), "until_done": True, "seconds": 8,
                                                        "volume": 60}}
 
     spoken = []
@@ -413,7 +417,7 @@ def test_routine_editor_sound_and_announcement_steps(sw, tmp_path):
     while time.time() < deadline and not (spoken and system.registry.platform.sound.played):
         time.sleep(0.02)
     assert spoken == ["Gaming mode on!!"] and system.registry.platform.sound.played == [(str(intro), False)]
-    assert system.registry.platform.sound.options[0]["min_s"] == 8.0
+    assert system.registry.platform.sound.options[0]["seconds"] == 8.0
     assert system.registry.platform.sound.options[0]["volume"] == 0.6
     w.window.close()                      # like the X button (frees the QML before the fixture ends)
     _pump()
@@ -441,8 +445,8 @@ def test_voice_volume_and_ducking_settings(sw):
 
 
 def test_routine_edits_are_kept_without_save_and_problems_are_shown(sw, tmp_path):
-    """Typing "at least" and closing the window at once must still store it; an unfinished step says why it's not
-    saved (no error pop-up); the sound's length is shown, so it's clear when "at least" repeats it."""
+    """Typing the time and closing the window at once must still store it; an unfinished step says why it's not
+    saved (no error pop-up); the sound's length is shown, and in words what "play for" does with it."""
     import shutil
     from pathlib import Path
 
@@ -472,17 +476,27 @@ def test_routine_edits_are_kept_without_save_and_problems_are_shown(sw, tmp_path
 
     tab, find = open_tab()
     assert find("soundName").property("text") == "intro.mp3  ·  2.0 s"
-    field = find("soundMin")
+    assert find("soundSecondsLabel").property("text") == "play for"
+    assert find("soundHint").property("text") == "Plays the whole sound once (2.0 s)."
+    field = find("soundSeconds")
     field.forceActiveFocus()
-    for key, mod, ch in ((Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier, ""), (Qt.Key.Key_7, Qt.KeyboardModifier.NoModifier, "7")):
-        for kind in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
-            QGuiApplication.sendEvent(w.window, QKeyEvent(kind, key, mod, ch))
-        _pump(2)
+
+    def type_number(ch, key):
+        for k, mod, c in ((Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier, ""), (key, Qt.KeyboardModifier.NoModifier, ch)):
+            for kind in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+                QGuiApplication.sendEvent(w.window, QKeyEvent(kind, k, mod, c))
+            _pump(2)
+
+    type_number("1", Qt.Key.Key_1)                                    # shorter than the sound: cut there
+    assert find("soundHint").property("text") == "Plays the first 1 s, then fades out."
+    type_number("7", Qt.Key.Key_7)                                    # longer: it repeats
+    assert field.property("text") == "7" and shiboken6.isValid(field) and field.hasActiveFocus()
+    assert find("soundHint").property("text") == "Repeats the sound until 7 s are up, then fades out."
     assert tab.property("dirty")
     w.window.close()                                                  # at once - before the auto-save timer
     _pump(5)
     assert w.window is None
-    assert system.services["routines"].get("Gaming mode").steps[0]["args"]["min_seconds"] == 7
+    assert system.services["routines"].get("Gaming mode").steps[0]["args"] == {"path": str(mp3), "seconds": 7}
 
     tab, find = open_tab()                                            # an unfinished step: told why, no pop-up
     QMetaObject.invokeMethod(tab, "setTool", Q_ARG("QVariant", 0), Q_ARG("QVariant", "open_app"))   # (no app name)
@@ -496,13 +510,13 @@ def test_routine_edits_are_kept_without_save_and_problems_are_shown(sw, tmp_path
     assert shiboken6.isValid(tab)
     w.window.close()
     _pump(5)
-    assert system.services["routines"].get("Gaming mode").steps[0]["args"]["min_seconds"] == 7   # (kept)
+    assert system.services["routines"].get("Gaming mode").steps[0]["args"]["seconds"] == 7   # (kept)
 
     tab, find = open_tab()                     # a template added twice: a second routine, yours stays as it is
     for want in ("Gaming mode 2", "Gaming mode 3"):
         QMetaObject.invokeMethod(find("templates"), "chosen", Q_ARG("QVariant", "gaming"))
         _pump(3)
         assert tab.property("name") == want and not tab.property("dirty")
-    assert system.services["routines"].get("Gaming mode").steps[0]["args"]["min_seconds"] == 7
+    assert system.services["routines"].get("Gaming mode").steps[0]["args"]["seconds"] == 7
     w.window.close()
     _pump(5)

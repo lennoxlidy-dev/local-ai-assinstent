@@ -7,7 +7,7 @@ Each file is decoded with ONE read call and played from memory: libsndfile 1.2's
 (the most common kind) wherever a read is split - silence or noise at every boundary, with 2 KB as with 30 s pieces
 (checked against ffmpeg) - while a single read is exact. 16-bit samples, at most the first ``MAX_DECODE_S``.
 
-``play_track`` holds the playing logic - repeat, minimum time, "until the routine is done" with a fade-out, stop -
+``play_track`` holds the playing logic - a set playing time, "until the routine is done" with a fade-out, stop -
 over a reader and a writer, so it is tested with real MP3 files and a fake output device.
 """
 
@@ -34,26 +34,35 @@ MAX_DECODE_S = 300.0         # a routine sound: the first 5 minutes at most (~50
 
 def play_track(read: Callable[[int], np.ndarray], rewind: Callable[[], None], write: Callable[[np.ndarray], object],
                rate: int, *, stop: threading.Event, cancelled: Callable[[], bool] | None = None,
-               until: Callable[[], bool] | None = None, min_s: float = 0.0, max_s: float = 900.0) -> float:
+               until: Callable[[], bool] | None = None, seconds: float = 0.0, max_s: float = 900.0) -> float:
     """Write the sound block by block; start again from the beginning while it should go on. Returns seconds played.
 
-    * ``min_s``: at least this long (a shorter sound repeats).
-    * ``until``: keep repeating until it returns True, then fade out over ``FADE_S`` (not before ``min_s``).
+    * without ``until``: the sound once - or, with ``seconds``, exactly that long: a longer sound fades out so that it
+      ends right then, a shorter one starts again (and its last round fades out the same way).
+    * ``until``: keep playing (repeating) until it returns True - but at least ``seconds`` - then fade out over
+      ``FADE_S``. (A routine that is done early: the sound ends at ``seconds``.)
     * ``stop`` / ``cancelled``: end at once.
     """
+    end = int(rate * seconds) if seconds > 0 else 0          # frames; 0 = no set time
     played = since_rewind = 0
-    fade_total = max(1, int(rate * FADE_S))
+    fade_len = max(1, int(rate * FADE_S))
+    if until is None and end:
+        fade_len = max(1, min(fade_len, end // 4))          # (a short time: a shorter fade)
     fade_left: int | None = None
+    fixed = until is None and end > 0                        # "play for … s"
     while not stop.is_set() and not (cancelled is not None and cancelled()):
-        t = played / rate
-        if t >= max_s:
+        if played >= rate * max_s or (fixed and played >= end):
             break
-        if fade_left is None and until is not None and t >= min_s and until():
-            fade_left = fade_total                          # the routine is done: fade out now
-        block = read(BLOCK)
+        if fade_left is None and played >= end - fade_len:
+            if fixed:                                       # the time is up: fade out, to end exactly at ``seconds``
+                fade_len = fade_left = end - played
+            elif until is not None and until():             # the routine is done (and the minimum nearly over)
+                fade_left = fade_len
+        # (a set time: blocks end exactly where the fade starts, and the fade exactly at ``seconds``)
+        block = read(min(BLOCK, (end if fade_left is not None else end - fade_len) - played) if fixed else BLOCK)
         if not len(block):                                  # end of the file
-            # go on while the minimum isn't reached, the routine isn't done, or a fade-out is still running
-            more = t < min_s or (until is not None and (fade_left is not None or not until()))
+            # again from the start while the time isn't over, a fade-out still runs, or the routine isn't done
+            more = played < end or fade_left is not None or (until is not None and not until())
             if more and since_rewind:                       # (an empty file is never repeated)
                 rewind()
                 since_rewind = 0
@@ -61,7 +70,8 @@ def play_track(read: Callable[[int], np.ndarray], rewind: Callable[[], None], wr
             break
         since_rewind += len(block)
         if fade_left is not None:
-            gain = np.clip((fade_left - np.arange(len(block))) / fade_total, 0.0, 1.0).astype(np.float32)
+            block = block[:fade_left]                       # (the fade's last frame is the sound's last)
+            gain = np.clip((fade_left - np.arange(len(block))) / fade_len, 0.0, 1.0).astype(np.float32)
             block = block * (gain[:, None] if block.ndim == 2 else gain)
             fade_left -= len(block)
         write(np.ascontiguousarray(block, dtype=np.float32))
@@ -69,6 +79,13 @@ def play_track(read: Callable[[int], np.ndarray], rewind: Callable[[], None], wr
         if fade_left is not None and fade_left <= 0:
             break
     return played / rate
+
+
+def how_long(until_done: bool, seconds: float) -> str:
+    """For the log and the step's result: "once", "for 60 s", "until the routine is done (at least 60 s)"."""
+    if until_done:
+        return "until the routine is done" + (f" (at least {seconds:g} s)" if seconds > 0 else "")
+    return f"for {seconds:g} s" if seconds > 0 else "once"
 
 
 class Ducker:
@@ -108,9 +125,11 @@ class SoundEngine:
         self._stops: set[threading.Event] = set()
 
     def play(self, path: str, wait: bool, cancelled: Callable[[], bool] | None = None, *,
-             until: Callable[[], bool] | None = None, min_s: float = 0.0, volume: float = 1.0) -> None:
+             until: Callable[[], bool] | None = None, seconds: float = 0.0, volume: float = 1.0) -> None:
+        """``seconds``: how long it plays (a longer sound fades out then, a shorter one repeats); with ``until``:
+        until the routine is done, but at least that long. See ``play_track``."""
         name = Path(path).name
-        fallback = self._fallback_kw(until, min_s, volume)
+        fallback = self._fallback_kw(until, seconds, volume)
         if Path(path).suffix.lower() not in DECODED_EXT:
             if self.fallback is None:
                 raise ToolError(f"Can't play {name}: use an MP3, WAV, FLAC or OGG file.")
@@ -133,7 +152,7 @@ class SoundEngine:
         def run() -> None:
             try:
                 with f:
-                    self._play_file(f, stop, cancelled, until, min_s, volume)
+                    self._play_file(f, stop, cancelled, until, seconds, volume)
             except Exception as e:
                 log.warning("sound %s failed: %s", name, e)
                 errors.append(e)
@@ -147,18 +166,20 @@ class SoundEngine:
         if errors:
             raise ToolError(f"Can't play {name}: {errors[0]}")
 
-    def _fallback_kw(self, until: Callable[[], bool] | None, min_s: float, volume: float) -> dict[str, Any]:
-        return {"until": until, "min_s": min_s, "volume": volume, "speaking": lambda: self.speaking(),
+    def _fallback_kw(self, until: Callable[[], bool] | None, seconds: float, volume: float) -> dict[str, Any]:
+        return {"until": until, "seconds": seconds, "volume": volume, "speaking": lambda: self.speaking(),
                 "duck_level": lambda: self.duck_level()}
 
     def _play_file(self, f: Any, stop: threading.Event, cancelled: Callable[[], bool] | None,
-                   until: Callable[[], bool] | None, min_s: float, volume: float = 1.0) -> None:
+                   until: Callable[[], bool] | None, seconds: float, volume: float = 1.0) -> None:
         import sounddevice as sd
 
         from .sources import resolve_device
 
         channels = min(f.channels, 2)
-        cap = int(f.samplerate * MAX_DECODE_S)
+        file_s = f.frames / f.samplerate if f.frames > 0 else 0.0
+        # (a set time shorter than the sound: only that much is needed)
+        cap = int(f.samplerate * (min(MAX_DECODE_S, seconds + 1) if until is None and seconds > 0 else MAX_DECODE_S))
         # ONE read call (see the module docstring): split reads garble VBR MP3s
         data = f.read(-1 if 0 <= f.frames <= cap else cap, dtype="int16", always_2d=True)[:, :channels]
         if f.samplerate != OUT_RATE and len(data):     # the voice's rate: known to work on this output device
@@ -183,14 +204,11 @@ class SoundEngine:
         stream = sd.OutputStream(samplerate=OUT_RATE, channels=channels, dtype="float32",
                                  device=resolve_device(self.device(), "output"), blocksize=BLOCK)
         stream.start()
-        file_s = len(data) / OUT_RATE
         try:
             played = play_track(read, rewind, lambda block: stream.write(duck(block)), OUT_RATE, stop=stop,
-                                cancelled=cancelled, until=until, min_s=min_s)
-            log.info("sound %s: %.1f s long, at least %.0f s%s -> played %.1f s (%d rounds)%s",
-                     Path(str(getattr(f, "name", "?"))).name, file_s, min_s,
-                     ", until the routine is done" if until is not None else "", played,
-                     -(-played // file_s) if file_s else 0, " - stopped" if stop.is_set() else "")
+                                cancelled=cancelled, until=until, seconds=seconds)
+            log.info("sound %s: %.1f s long, %s -> played %.1f s%s", Path(str(getattr(f, "name", "?"))).name,
+                     file_s, how_long(until is not None, seconds), played, " - stopped" if stop.is_set() else "")
         finally:
             if stop.is_set() or (cancelled is not None and cancelled()):
                 stream.abort()                   # "stop": silence now
@@ -209,4 +227,4 @@ class SoundEngine:
                 pass
 
 
-__all__ = ["DECODED_EXT", "Ducker", "SoundEngine", "play_track"]
+__all__ = ["DECODED_EXT", "Ducker", "SoundEngine", "how_long", "play_track"]

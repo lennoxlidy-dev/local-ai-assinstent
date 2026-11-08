@@ -136,7 +136,7 @@ without the language model. Create routines in the setup wizard, from a template
 | Step | What it does |
 |---|---|
 | **Say something** | speaks a sentence the moment the routine reaches it, e.g. "Gaming mode activated. All systems online." |
-| **Play a sound** | plays an MP3, WAV, FLAC or OGG file (WMA/M4A through Windows' own player), no player window. Click **Choose sound…**, then choose how it ends: **Plays once**; **Plays once, then the next step**; or **Keeps playing until the routine is done** (repeats if it's shorter, fades out when the last step is done). **play at least … s** makes it play at least that long: a sound shorter than that starts again (the length is shown next to the file name, e.g. `intro.mp3 · 4.0 s`; a longer sound already plays that long); **volume** in % |
+| **Play a sound** | plays an MP3, WAV, FLAC or OGG file (WMA/M4A through Windows' own player), no player window. Click **Choose sound…**, then choose how it plays: **Plays while the next steps run**; **Plays, then the next step**; or **Keeps playing until the routine is done** (repeats if it's shorter, fades out when the last step is done). **play for … s** sets how long: a longer song fades out at exactly that time (e.g. the first 60 s of a song), a shorter sound repeats until then; empty = the whole sound once. With *Keeps playing until the routine is done* the field is **at least … s**. The sound's length is shown next to its name, and a line under the fields says what will happen ("Plays the first 60 s, then fades out."); **volume** in % |
 | **Check / update drivers** | **Only check** says which driver updates Windows Update has; **Install** asks first and shows the Windows administrator prompt (see [Driver updates](#driver-updates)) |
 | **Open an app** | e.g. Steam, Discord, your game launcher (`{"name": "Steam"}`) |
 | **Volume**, **Media**, **Play music**, **Virtual desktop**, **Wait**, … | everything the assistant can do, with the same permission checks |
@@ -145,8 +145,9 @@ Example: a gaming routine that sounds like a movie AI:
 
 1. *Settings → Routines → From template → Gaming mode* (Steam, Discord, volume 40 % and "Gaming mode activated").
 2. **+ Add step → Play a sound**, then click **Choose sound…** and pick your intro sound (any MP3/WAV on your PC).
-   Move it to the top with ↑, choose **Keeps playing until the routine is done**, and set e.g. **play at least 10 s**,
-   so the music plays while everything starts and fades out at the end.
+   Move it to the top with ↑, choose **Keeps playing until the routine is done**, and set e.g. **at least 10 s**,
+   so the music plays while everything starts and fades out at the end. Or keep **Plays while the next steps run**
+   and set **play for 60 s**: the first minute of your song, then it fades out.
 3. Change the **Say something** text to your own line and add more **Open an app** steps (e.g. your game).
    Every change saves itself: the line at the top of the editor says **✓ Saved**, or why it can't be saved yet
    (e.g. an app step without a name, or a name another routine already has). A template you add again becomes

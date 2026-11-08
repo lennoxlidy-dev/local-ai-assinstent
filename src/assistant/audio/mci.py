@@ -1,8 +1,8 @@
 """Playing a sound file through Windows' MCI player (winmm): MP3/WAV/WMA, no window, no extra packages.
 
-``play_session`` is the whole playing logic - repeat while it should go on, a minimum time, "until the routine is
-done" with a short fade-out, stop/cancel - and talks to MCI only through ``cmd(str) -> str``, so it is tested
-without Windows (tests feed it a fake player).
+``play_session`` is the whole playing logic - a set playing time, "until the routine is done" with a short
+fade-out, stop/cancel - and talks to MCI only through ``cmd(str) -> str``, so it is tested without Windows (tests
+feed it a fake player).
 """
 
 from __future__ import annotations
@@ -12,17 +12,19 @@ import time
 from collections.abc import Callable
 
 FADE_STEPS = 10           # fade-out: 10 volume steps of 0.1 s
+FADE_S = FADE_STEPS * 0.1
 
 
 def play_session(cmd: Callable[[str], str], alias: str, path: str, *, stop: threading.Event,
                  cancelled: Callable[[], bool] | None = None, until: Callable[[], bool] | None = None,
-                 min_s: float = 0.0, volume: float = 1.0, speaking: Callable[[], bool] | None = None,
+                 seconds: float = 0.0, volume: float = 1.0, speaking: Callable[[], bool] | None = None,
                  duck_level: Callable[[], float] | None = None, max_s: float = 900.0, poll: float = 0.1,
                  clock: Callable[[], float] = time.monotonic) -> None:
-    """Play ``path`` once - again from the start while it should go on - then close it.
+    """Play ``path`` - again from the start while it should go on - then close it.
 
-    * ``min_s``: play at least this long (a shorter sound starts again).
-    * ``until``: keep playing (repeating) until it returns True, then fade out - unless ``min_s`` isn't over yet.
+    * without ``until``: once - or, with ``seconds``, that long: a longer sound fades out to end then, a shorter
+      one starts again.
+    * ``until``: keep playing (repeating) until it returns True - but at least ``seconds`` - then fade out.
     * ``stop`` / ``cancelled``: end at once ("stop", panic hotkey, the routine was cancelled).
     * ``volume`` (0-1), and lower (``duck_level``) while ``speaking()``: the assistant's voice stays clear.
     """
@@ -59,11 +61,12 @@ def play_session(cmd: Callable[[str], str], alias: str, path: str, *, stop: thre
             seen = seen or mode == "playing"
             ended = mode == "stopped" and (seen or clock() - t_play > 1.5)
             done = until is not None and until()
-            if done and elapsed >= min_s and not ended:
-                _fade(cmd, alias, stop, level)          # the routine has finished: end the music softly
+            # the set time is up / the routine has finished (and the minimum is nearly over): end the music softly
+            if elapsed >= seconds - FADE_S and (done if until is not None else seconds > 0) and not ended:
+                _fade(cmd, alias, stop, level)          # (1 s: it ends at ``seconds``)
                 return
             if ended:
-                if seen and (elapsed < min_s or (until is not None and not done)):
+                if seen and (elapsed < seconds or (until is not None and not done)):
                     cmd(f"play {alias} from 0")         # shorter than wanted: once more from the start
                     t_play, seen = clock(), False
                     continue

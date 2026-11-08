@@ -116,8 +116,23 @@ def test_routines_editor(sw):
     call(w, "saveRoutine", name="Deep focus", old="Focus", steps=[{"tool": "volume", "args": {"level": 10}}])
     names = [x["name"] for x in w.model.get("routines")]
     assert names == ["Deep focus"]
-    call(w, "addTemplate", key="night")
+    assert call(w, "addTemplate", key="night")["name"] == "Good night"
     assert any(x["name"] == "Good night" for x in w.model.get("routines"))
+    # another routine's name is refused, never overwritten (the editor saves while you type a new name)
+    store = system.services["routines"]
+    r = call(w, "saveRoutine", name="good NIGHT", old="Deep focus", steps=[{"tool": "volume", "args": {"level": 99}}])
+    assert not r["ok"] and "Good night" in r["error"]
+    assert store.get("Deep focus").steps[0]["args"]["level"] == 10 and store.get("Good night").steps != [
+        {"tool": "volume", "args": {"level": 99}}]
+    r = call(w, "saveRoutine", name="Deep focus", steps=[{"tool": "volume", "args": {"level": 99}}], quiet=True)
+    assert not r["ok"] and "Deep focus" in r["error"] and store.get("Deep focus").steps[0]["args"]["level"] == 10
+    assert call(w, "saveRoutine", name="Deep Focus", old="Deep focus",            # (its own name: fine)
+                steps=[{"tool": "volume", "args": {"level": 11}}])["ok"]
+    assert store.get("deep focus").name == "Deep Focus" and store.get("deep focus").steps[0]["args"]["level"] == 11
+    good_night = store.get("Good night").steps
+    assert call(w, "addTemplate", key="night")["name"] == "Good night 2"        # added again: a new one
+    assert store.get("Good night").steps == good_night
+    call(w, "deleteRoutine", name="Good night 2")
     call(w, "deleteRoutine", name="Deep focus")
     assert [x["name"] for x in w.model.get("routines")] == ["Good night"]
 
@@ -328,6 +343,20 @@ def test_routine_editor_sound_and_announcement_steps(sw, tmp_path):
             yield from visual(child)
 
     tab = w.window.findChildren(QQuickItem, "routinesTab")[0]
+    state = next(i for i in visual(tab) if i.objectName() == "saveState")
+    assert state.property("text").startswith("✓")
+
+    def autosaved():                       # no Save click: edits save themselves ~0.7 s after the last one
+        import time as _t
+
+        end = _t.monotonic() + 3
+        while tab.property("dirty") and _t.monotonic() < end:
+            _pump(2)
+            _t.sleep(0.02)
+        assert not tab.property("dirty") and state.property("text").startswith("✓")
+
+    sound_name = next(i for i in visual(tab) if i.objectName() == "soundName" and i.isVisible())
+    assert sound_name.property("text") == "intro.mp3"                 # (not a real MP3 here: no length known)
     field = next(i for i in visual(tab) if i.objectName() == "sayField" and i.isVisible())
     assert field.property("text") == "Gaming mode on"
     field.forceActiveFocus()
@@ -338,6 +367,9 @@ def test_routine_editor_sound_and_announcement_steps(sw, tmp_path):
         _pump(3)
     assert shiboken6.isValid(field) and field.hasActiveFocus()          # not rebuilt while typing
     assert field.property("text") == "Gaming mode on!!"
+    assert tab.property("dirty") and not state.property("text").startswith("✓")    # "Saving…"
+    autosaved()
+    assert system.services["routines"].get("Gaming mode").steps[0]["args"]["text"] == "Gaming mode on!!"
     # the sound: "keeps playing until the routine is done", at least 8 s
     from PySide6.QtCore import Q_ARG
 
@@ -359,7 +391,7 @@ def test_routine_editor_sound_and_announcement_steps(sw, tmp_path):
             QGuiApplication.sendEvent(w.window, QKeyEvent(kind, key, mod, ch))
         _pump(2)
     assert shiboken6.isValid(vol) and vol.property("text") == "60"
-    QMetaObject.invokeMethod(tab, "save")
+    autosaved()
     steps = system.services["routines"].get("Gaming mode").steps
     assert steps[0] == {"tool": "say", "args": {"text": "Gaming mode on!!"}}
     assert steps[1] == {"tool": "play_sound", "args": {"path": str(intro), "until_done": True, "min_seconds": 8,
@@ -406,3 +438,71 @@ def test_voice_volume_and_ducking_settings(sw):
     w.window.close()
     for _ in range(5):
         QCoreApplication.processEvents()
+
+
+def test_routine_edits_are_kept_without_save_and_problems_are_shown(sw, tmp_path):
+    """Typing "at least" and closing the window at once must still store it; an unfinished step says why it's not
+    saved (no error pop-up); the sound's length is shown, so it's clear when "at least" repeats it."""
+    import shutil
+    from pathlib import Path
+
+    import shiboken6
+    from PySide6.QtCore import Q_ARG, QEvent, QMetaObject, Qt
+    from PySide6.QtGui import QGuiApplication, QKeyEvent
+    from PySide6.QtQuick import QQuickItem
+
+    w, system, _ = sw
+    mp3 = tmp_path / "user" / "Music" / "intro.mp3"
+    mp3.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(Path(__file__).parent / "data" / "tone_44k_stereo_2s.mp3", mp3)
+    assert call(w, "saveRoutine", name="Gaming mode", steps=[{"tool": "play_sound", "args": json.dumps({"path": str(mp3)})}])["ok"]
+
+    def open_tab():
+        assert w.show()
+        call(w, "tab", name="routines")
+        _pump()
+        tab = w.window.findChildren(QQuickItem, "routinesTab")[0]
+
+        def visual(item):
+            yield item
+            for c in item.childItems():
+                yield from visual(c)
+
+        return tab, (lambda name: next(i for i in visual(tab) if i.objectName() == name and i.isVisible()))
+
+    tab, find = open_tab()
+    assert find("soundName").property("text") == "intro.mp3  ·  2.0 s"
+    field = find("soundMin")
+    field.forceActiveFocus()
+    for key, mod, ch in ((Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier, ""), (Qt.Key.Key_7, Qt.KeyboardModifier.NoModifier, "7")):
+        for kind in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+            QGuiApplication.sendEvent(w.window, QKeyEvent(kind, key, mod, ch))
+        _pump(2)
+    assert tab.property("dirty")
+    w.window.close()                                                  # at once - before the auto-save timer
+    _pump(5)
+    assert w.window is None
+    assert system.services["routines"].get("Gaming mode").steps[0]["args"]["min_seconds"] == 7
+
+    tab, find = open_tab()                                            # an unfinished step: told why, no pop-up
+    QMetaObject.invokeMethod(tab, "setTool", Q_ARG("QVariant", 0), Q_ARG("QVariant", "open_app"))   # (no app name)
+    import time
+    end = time.monotonic() + 3
+    while tab.property("dirty") and not tab.property("saveError") and time.monotonic() < end:
+        _pump(2)
+        time.sleep(0.02)
+    text = find("saveState").property("text")
+    assert text.startswith("⚠ Not saved") and "name" in text and w.model.get("statusKind") != "error"
+    assert shiboken6.isValid(tab)
+    w.window.close()
+    _pump(5)
+    assert system.services["routines"].get("Gaming mode").steps[0]["args"]["min_seconds"] == 7   # (kept)
+
+    tab, find = open_tab()                     # a template added twice: a second routine, yours stays as it is
+    for want in ("Gaming mode 2", "Gaming mode 3"):
+        QMetaObject.invokeMethod(find("templates"), "chosen", Q_ARG("QVariant", "gaming"))
+        _pump(3)
+        assert tab.property("name") == want and not tab.property("dirty")
+    assert system.services["routines"].get("Gaming mode").steps[0]["args"]["min_seconds"] == 7
+    w.window.close()
+    _pump(5)

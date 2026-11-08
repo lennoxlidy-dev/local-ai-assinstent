@@ -183,9 +183,14 @@ class SoundEngine:
         stream = sd.OutputStream(samplerate=OUT_RATE, channels=channels, dtype="float32",
                                  device=resolve_device(self.device(), "output"), blocksize=BLOCK)
         stream.start()
+        file_s = len(data) / OUT_RATE
         try:
-            play_track(read, rewind, lambda block: stream.write(duck(block)), OUT_RATE, stop=stop,
-                       cancelled=cancelled, until=until, min_s=min_s)
+            played = play_track(read, rewind, lambda block: stream.write(duck(block)), OUT_RATE, stop=stop,
+                                cancelled=cancelled, until=until, min_s=min_s)
+            log.info("sound %s: %.1f s long, at least %.0f s%s -> played %.1f s (%d rounds)%s",
+                     Path(str(getattr(f, "name", "?"))).name, file_s, min_s,
+                     ", until the routine is done" if until is not None else "", played,
+                     -(-played // file_s) if file_s else 0, " - stopped" if stop.is_set() else "")
         finally:
             if stop.is_set() or (cancelled is not None and cancelled()):
                 stream.abort()                   # "stop": silence now

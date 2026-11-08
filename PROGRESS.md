@@ -119,7 +119,7 @@ src/assistant/
                        send2trash IFileOperation, Everything SDK, SHGetKnownFolderPath)
     inputs.py          SendInput (fixed-width ctypes structs, unit-tested layout)
     com.py             per-thread COM init; WinRT worker thread (MTA + asyncio)
-tests/                 pytest (447 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
+tests/                 pytest (448 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
                        the real speech models - each skipped when not installed)
 bench/                 llm_bench.py + cases.py: GPU latency + tool-calling accuracy per model;
                        perf_bench.py: every performance target of the spec (idle, wake, STT, TTS, fast path, LLM)
@@ -591,6 +591,28 @@ Version 0.1.8 (feedback: "make the assistant louder so you can hear it talking w
 - **Sound step volume** (5-100 %) in the routine editor; the fade-out starts from the current level.
 - Tests: ducking ramp (no clicks), ducking under the voice with an MP3, MCI ducking, loudness math, and the real voice
   model (levelled to -1 dBFS peaks; 160 % louder but never clipped); editor volume field; voice sliders.
+
+Version 0.1.9 (feedback: "the at least thing on play a sound does not work"):
+
+- Checked first: the playing itself was right - "at least 7 s" on a 2 s MP3 plays 4 rounds (8 s) in all three modes,
+  from the voice command and from Run now, with the real engine. What failed was the editor: unlike every other
+  setting, a routine was only stored by its **Save** button at the very bottom (often scrolled out of view), so a
+  typed "at least" was lost when you switched routines, tabs or closed the window - the routine kept playing once.
+  And "at least" changes nothing for a sound that is already longer, which wasn't visible.
+- **Routine edits save themselves** 0.7 s after the last change, and at once when you switch routine, tab or close the
+  window. A line at the top says "✓ Saved", "Saving…", or why it can't be saved yet (an unfinished step, no name) -
+  in the editor, no error pop-up while you type. Save stays for a manual save.
+- The sound's **length** shows next to its file name ("intro.mp3 · 2.0 s"; cached per file version), so it's clear
+  when "play at least" repeats it.
+- The log says what each sound did: "sound intro.mp3: 2.0 s long, at least 7 s -> played 8.0 s (4 rounds)".
+- **A routine can't overwrite another one by its name** any more: the store replaces a routine with the same name
+  (case-insensitive), and with auto-save a pause while renaming could have hit one - now the editor says "there is
+  already a routine called …". A template added again becomes "Gaming mode 2" instead of replacing your edited
+  "Gaming mode", and the editor opens that new routine (before: the last one in the list). A change of only the
+  capitalisation ("gaming mode" -> "Gaming mode") is stored now.
+- Tests: an "at least" typed and the window closed at once is stored; an unfinished step shows "⚠ Not saved: …" and
+  no error; the length shown for a real MP3; the existing editor test now relies on the auto-save (no Save click);
+  name clashes (also quiet), case-only rename, a template added twice from the editor.
 
 ## How to test
 

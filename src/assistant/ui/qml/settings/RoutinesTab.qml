@@ -16,15 +16,25 @@ Item {
     property string desc: ""
     property var steps: []
     property bool dirty: false
+    property string saveError: ""
+    // Every change saves itself shortly after the last edit (like all other settings) - before, only the Save button
+    // at the very bottom stored it, and edits such as "at least … s" were lost unnoticed.
+    Timer { id: autosave; interval: 700; onTriggered: tab.save(true) }
+    function touched() { dirty = true; autosave.restart() }
+    function flush() { autosave.stop(); if (dirty) save(true) }
+    Component.onDestruction: { try { flush() } catch (e) {} }      // tab switched / window closed
     function load(i) {
+        flush()
         var r = settings.routines[i]
         current = i; old = r.name; name = r.name; desc = r.description || ""
-        steps = r.steps.map(function(s) { return {tool: s.tool, args: s.args} }); dirty = false
+        steps = r.steps.map(function(s) { return {tool: s.tool, args: s.args} }); dirty = false; saveError = ""
     }
-    function blank() { current = -1; old = ""; name = ""; desc = ""; steps = [{tool: "open_app", args: "{\"name\": \"\"}"}]; dirty = true }
-    function put(i, k, v) { var a = steps.slice(); a[i] = Object.assign({}, a[i]); a[i][k] = v; steps = a; dirty = true }
+    function loadNamed(n) { for (var i = 0; i < settings.routines.length; i++) if (settings.routines[i].name === n) { load(i); return } }
+    function blank() { flush(); current = -1; old = ""; name = ""; desc = ""; saveError = ""
+                       steps = [{tool: "open_app", args: "{\"name\": \"\"}"}]; dirty = true }
+    function put(i, k, v) { var a = steps.slice(); a[i] = Object.assign({}, a[i]); a[i][k] = v; steps = a; touched() }
     // while typing: change the step in place - a new array would rebuild every row and take the focus away
-    function edit(i, args) { steps[i].args = args; dirty = true }
+    function edit(i, args) { steps[i].args = args; touched() }
     function argsOf(s) { try { var o = JSON.parse(s.args || "{}"); return (o && typeof o === "object") ? o : {} } catch (e) { return {} } }
     function defaultArgs(t) {
         var d = {say: {text: ""}, play_sound: {path: ""}, wait: {seconds: 2}, open_app: {name: ""},
@@ -32,7 +42,7 @@ Item {
                  open_url: {url: "https://"}, driver_updates: {action: "check"}}
         return JSON.stringify(d[t] || {})
     }
-    function setTool(i, t) { var a = steps.slice(); a[i] = {tool: t, args: defaultArgs(t)}; steps = a; dirty = true }
+    function setTool(i, t) { var a = steps.slice(); a[i] = {tool: t, args: defaultArgs(t)}; steps = a; touched() }
     // a sound step's args from its parts: how it ends ("once" | "wait" | "until") and the minimum seconds
     function soundArgs(path, end, minS, vol) {
         var o = {path: path || ""}
@@ -44,12 +54,14 @@ Item {
     }
     function soundVol(a) { return a.volume || 100 }
     function soundEnd(a) { return a.until_done === true ? "until" : (a.wait === true ? "wait" : "once") }
-    function move(i, d) { var a = steps.slice(); var j = i + d; if (j < 0 || j >= a.length) return; var t = a[i]; a[i] = a[j]; a[j] = t; steps = a; dirty = true }
-    function removeStep(i) { var a = steps.slice(); a.splice(i, 1); steps = a; dirty = true }
-    function save() {
-        var res = settings.call("saveRoutine", {name: name, old: old, description: desc, steps: steps})
-        if (res.ok) { old = name; dirty = false
+    function move(i, d) { var a = steps.slice(); var j = i + d; if (j < 0 || j >= a.length) return; var t = a[i]; a[i] = a[j]; a[j] = t; steps = a; touched() }
+    function removeStep(i) { var a = steps.slice(); a.splice(i, 1); steps = a; touched() }
+    function save(quiet) {
+        if (!dirty || name.trim().length === 0) return
+        var res = settings.call("saveRoutine", {name: name, old: old, description: desc, steps: steps, quiet: quiet === true})
+        if (res && res.ok) { old = name; dirty = false; saveError = ""
             for (var i = 0; i < settings.routines.length; i++) if (settings.routines[i].name === name) current = i }
+        else saveError = (res && res.error) || ""
     }
     Component.onCompleted: if (settings.routines.length > 0) load(0)
     readonly property var templates: [{key: "gaming", label: settings.lang === "de" ? "Spielmodus" : "Gaming mode"},
@@ -69,9 +81,10 @@ Item {
             RowLayout {
                 spacing: 6
                 Btn { small: true; primary: true; text: "+ " + tab.tr.new_routine; onClicked: tab.blank() }
-                Dropdown { implicitWidth: 140; options: tab.templates.map(function(t) { return {value: t.key, label: t.label} })
+                Dropdown { objectName: "templates"; implicitWidth: 140; options: tab.templates.map(function(t) { return {value: t.key, label: t.label} })
                            displayText: tab.tr.from_template; currentIndex: -1
-                           onChosen: function(v) { settings.call("addTemplate", {key: v}); if (settings.routines.length) tab.load(settings.routines.length - 1) } }
+                           onChosen: function(v) { tab.flush(); var r = settings.call("addTemplate", {key: v})
+                                                   if (r && r.name) tab.loadNamed(r.name) } }
             }
             ListView {
                 Layout.fillWidth: true
@@ -114,12 +127,17 @@ Item {
                     width: parent.width
                     spacing: 10
                     Text { text: tab.tr.routine_hint; color: tab.th.dim; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                    Text { objectName: "saveState"; Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12
+                           text: !tab.dirty ? "✓ " + tab.tr.routine_saved
+                                 : tab.saveError ? "⚠ " + tab.tr.routine_not_saved + ": " + tab.saveError
+                                 : tab.name.trim().length === 0 ? tab.tr.routine_needs_name : tab.tr.routine_saving
+                           color: tab.dirty && tab.saveError ? tab.th.danger : (tab.dirty ? tab.th.dim : tab.th.ok) }
                     RowLayout { spacing: 10; Layout.fillWidth: true
                         Text { text: tab.tr.routine_name; color: tab.th.fg; font.pixelSize: 13; Layout.preferredWidth: 100 }
-                        InputField { Layout.fillWidth: true; value: tab.name; onTextEdited: { tab.name = text; tab.dirty = true } } }
+                        InputField { Layout.fillWidth: true; value: tab.name; onTextEdited: { tab.name = text; tab.touched() } } }
                     RowLayout { spacing: 10; Layout.fillWidth: true
                         Text { text: tab.tr.routine_desc; color: tab.th.fg; font.pixelSize: 13; Layout.preferredWidth: 100 }
-                        InputField { Layout.fillWidth: true; value: tab.desc; onTextEdited: { tab.desc = text; tab.dirty = true } } }
+                        InputField { Layout.fillWidth: true; value: tab.desc; onTextEdited: { tab.desc = text; tab.touched() } } }
                     Text { text: tab.tr.steps; color: tab.th.fg; font { pixelSize: 14; weight: Font.DemiBold }
                                Layout.topMargin: 6 }
                     Repeater {
@@ -158,7 +176,11 @@ Item {
                                         Btn { small: true; text: "♪ " + tab.tr.choose_sound
                                               onClicked: { var r = settings.call("pickSound", {}); var a = tab.argsOf(tab.steps[index])
                                                            if (r && r.path) tab.put(index, "args", tab.soundArgs(r.path, tab.soundEnd(a), a.min_seconds || 0, tab.soundVol(a))) } }
-                                        Text { Layout.fillWidth: true; text: parent.parent.a.path ? parent.parent.a.path.split(/[\\/]/).pop() : tab.tr.no_sound
+                                        Text { objectName: "soundName"; Layout.fillWidth: true
+                                               // the length shows when "at least" makes a difference (a shorter sound repeats)
+                                               readonly property real secs: (settings && parent.parent.a.path)
+                                                   ? (settings.call("soundInfo", {path: parent.parent.a.path}).seconds || 0) : 0
+                                               text: parent.parent.a.path ? parent.parent.a.path.split(/[\\/]/).pop() + (secs > 0 ? "  ·  " + secs.toFixed(1) + " s" : "") : tab.tr.no_sound
                                                color: parent.parent.a.path ? tab.th.fg : tab.th.dim; elide: Text.ElideMiddle; font.pixelSize: 12 }
                                     }
                                     RowLayout { Layout.fillWidth: true; spacing: 8
@@ -202,7 +224,7 @@ Item {
                         }
                     }
                     Btn { small: true; text: "+ " + tab.tr.add_step
-                          onClicked: { var a = tab.steps.slice(); a.push({tool: "open_app", args: "{\"name\": \"\"}"}); tab.steps = a; tab.dirty = true } }
+                          onClicked: { var a = tab.steps.slice(); a.push({tool: "open_app", args: "{\"name\": \"\"}"}); tab.steps = a; tab.touched() } }
                     Flow {
                         Layout.fillWidth: true
                         Layout.topMargin: 10

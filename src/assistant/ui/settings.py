@@ -8,6 +8,7 @@ Every change is saved immediately (config.toml / permissions.toml / the database
 from __future__ import annotations
 
 import csv
+import functools
 import gc
 import io
 import json
@@ -97,6 +98,14 @@ def _json_value(v: Any) -> Any:
     if isinstance(v, (list, tuple)):
         return [_json_value(x) for x in v]
     return v
+
+
+@functools.lru_cache(maxsize=64)
+def _sound_seconds(path: str, size: int, mtime_ns: int) -> float:
+    """(cached per file version: the editor asks again whenever its rows are rebuilt)"""
+    import soundfile as sf
+
+    return round(float(sf.info(path).duration), 1)
 
 
 class SettingsWindow(QObject):
@@ -598,7 +607,17 @@ class SettingsWindow(QObject):
 
     # ------------------------------------------------------------------ actions: routines
     def do_saveRoutine(self, name: str, steps: list[Any], description: str = "",  # noqa: N802
-                       old: str = "") -> dict[str, Any]:
+                       old: str = "", quiet: bool = False) -> dict[str, Any]:
+        """``quiet``: the editor's auto-save - a routine that isn't valid yet (an empty step while you type) is reported
+        in the editor's status line instead of an error pop-up, and a successful save shows no toast."""
+        try:
+            return self._save_routine(name, steps, description, old, quiet)
+        except ValueError as e:
+            if not quiet:
+                raise
+            return {"ok": False, "error": str(e).strip("'\"")}
+
+    def _save_routine(self, name: str, steps: list[Any], description: str, old: str, quiet: bool) -> dict[str, Any]:
         from ..storage.routines import Routine
         from ..tools.base import ToolError
         from ..tools.routines import validate_steps
@@ -620,12 +639,26 @@ class SettingsWindow(QObject):
         except ToolError as e:
             raise ValueError(str(e)) from None
         store = self.d.tools.services["routines"]
+        other = store.get(name)
+        if other is not None and other.name.casefold() != old.casefold():
+            # (the store would overwrite that routine - and the editor saves while you type a new name)
+            raise ValueError(self.t("routine_exists", name=other.name))
         if old and old.casefold() != name.casefold():
             store.delete(old)
         store.save(Routine(name=name, steps=clean, description=description.strip()))
         self._refresh_routines()
-        self._saved()
+        if not quiet:
+            self._saved()
+        log.info("routine saved: %s (%d steps)", name, len(clean))
         return {"ok": True}
+
+    def do_soundInfo(self, path: str) -> dict[str, Any]:  # noqa: N802
+        """Length of a sound file (shown next to its name in the routine editor; 0 = unknown)."""
+        try:
+            st = Path(path).stat()
+            return {"ok": True, "seconds": _sound_seconds(path, st.st_size, st.st_mtime_ns)}
+        except Exception:
+            return {"ok": True, "seconds": 0}
 
     def do_deleteRoutine(self, name: str) -> dict[str, Any]:  # noqa: N802
         self.d.tools.services["routines"].delete(name)
@@ -641,7 +674,12 @@ class SettingsWindow(QObject):
         env = WizardEnv(ctx=self.ctx, app_names=self._app_names)
         apps = _installed(env, tpl["apps"]) or tpl["apps"]
         steps = routine_steps({"key": key, "apps": ", ".join(apps), "volume": tpl["volume"]}, self._lang())
-        return self.do_saveRoutine(tpl["name"][self._lang()], steps, "")
+        store, base = self.d.tools.services["routines"], tpl["name"][self._lang()]
+        name, n = base, 2
+        while store.get(name) is not None:          # added again: "Gaming mode 2" - never overwrite your version
+            name, n = f"{base} {n}", n + 1
+        res = self.do_saveRoutine(name, steps, "")
+        return {**res, "name": name}
 
     def do_pickSound(self) -> dict[str, Any]:  # noqa: N802
         title, filt = self.t("choose_sound"), "Sounds (*.mp3 *.wav *.flac *.ogg *.wma *.m4a *.aac)"

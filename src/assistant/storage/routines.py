@@ -28,8 +28,8 @@ class RoutineStore:
         steps = json.dumps(routine.steps, ensure_ascii=False)
         self.db.execute(
             "INSERT INTO routines(name, description, steps, created, updated) VALUES (?,?,?,?,?) "
-            "ON CONFLICT(name) DO UPDATE SET description=excluded.description, steps=excluded.steps, "
-            "updated=excluded.updated",
+            "ON CONFLICT(name) DO UPDATE SET name=excluded.name, description=excluded.description, "
+            "steps=excluded.steps, updated=excluded.updated",          # (name: "gaming mode" -> "Gaming mode")
             (routine.name.strip(), routine.description, steps, now, now))
         return self.get(routine.name)  # type: ignore[return-value]
 

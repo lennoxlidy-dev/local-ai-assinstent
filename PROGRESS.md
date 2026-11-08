@@ -119,7 +119,7 @@ src/assistant/
                        send2trash IFileOperation, Everything SDK, SHGetKnownFolderPath)
     inputs.py          SendInput (fixed-width ctypes structs, unit-tested layout)
     com.py             per-thread COM init; WinRT worker thread (MTA + asyncio)
-tests/                 pytest (451 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
+tests/                 pytest (481 tests; test_llm_integration.py runs a real llama-server, test_voice_pipeline.py
                        the real speech models - each skipped when not installed)
 bench/                 llm_bench.py + cases.py: GPU latency + tool-calling accuracy per model;
                        perf_bench.py: every performance target of the spec (idle, wake, STT, TTS, fast path, LLM)
@@ -635,6 +635,42 @@ Version 0.1.10 (feedback with the log: "it played the whole song it should only 
 - Log: `sound X: 208.4 s long, for 60 s -> played 60.0 s`; the step says "Playing X for 60 s."
 - Tests: a long sound cut at 60 s (engine + MCI), a short one repeated to an exact time, until-done ending at its
   minimum or after the routine, an old `min_seconds` routine, the editor's label, empty field and hints.
+
+Version 0.1.11 (feedback: "make so he can install nvidia drivers and other drivers through their apps"):
+
+- The makers' apps (NVIDIA App, Lenovo Vantage, MyASUS, Armoury Crate, MSI Center, HP Support Assistant, Intel DSA,
+  AMD Software) have no interface another program may drive, so the assistant does what they do, where that is
+  possible, and names them where it isn't (`tools/vendor_drivers.py`):
+  - **NVIDIA**: NVIDIA's driver service (`AjaxDriverService … DriverManualLookup&pfid=…&osID=57&dch=1`, the one its
+    download page and the maintained nvidia-update script use) says which Game Ready driver is newest. The GPU's
+    product id comes from NVIDIA's own product list (`nvidia_ids.py`: 878 GPUs, from the public-domain nvidia-data
+    snapshot of `lookupValueSearch.aspx`); the installed version from NVML. The lookup runs in PowerShell
+    (`Invoke-WebRequest`, the same web stack as nvidia-update). Its answer is data: version `^\d{3}\.\d{2}$` and the
+    address `https://*.download.nvidia.com/Windows/….exe` are checked before anything uses them.
+  - Installing NVIDIA's package happens in the elevated step: download (curl.exe) into
+    `%ProgramFiles%\Assistant\driver-download` (only administrators can change it - nothing can be swapped in
+    between), 4 GB free checked, run only if `Get-AuthenticodeSignature` is Valid and signed by "O=NVIDIA
+    Corporation", then `-s -noreboot -noeula` (silent unpack + install), wait for NVIDIA's setup, read the driver
+    version back from WMI and delete the download. The result compares that version with the expected one, so an
+    installer that didn't take effect is reported ("restart the PC; if it stays, use the NVIDIA App").
+  - **Dell Command | Update** (`dcu-cli.exe` in its two install paths): `/applyUpdates -updateType=driver
+    -reboot=disable -silent` - drivers only, never BIOS/firmware; exit codes explained (500 = none, 1 = restart …).
+  - **Other makers' apps** are found among the installed apps and named ("say “open Lenovo Vantage”").
+- **One UAC prompt for everything**: Windows Update + NVIDIA + Dell are parts of ONE elevated script, each in its
+  own try, results as one JSON line; the notification has a sentence per part. The elevated command is encoded twice
+  and must fit Windows' 32,767-character command line: up to ~25 updates it goes inline as before; a longer one is
+  written to a file and the elevated side runs it only if its SHA-256 - passed on the command line - matches.
+- `driver_updates` gets `source` (all | windows_update | nvidia). Voice: "update my NVIDIA driver", "update my
+  graphics driver", "is there a new NVIDIA driver", "aktualisiere meinen Grafiktreiber", "gibt es einen neuen
+  NVIDIA-Treiber" (fast path, no language model). "Update my drivers" covers all three.
+- Not testable here: real Windows, NVIDIA's servers (this container's network doesn't reach them) and a real Dell.
+  The NVIDIA request and install switches follow the maintained nvidia-update script (v1.15.3) and NVIDIA's forum;
+  the installed version is checked afterwards rather than trusting the installer's exit code.
+- Tests: GPU name -> product id (laptop/desktop, SUPER, variants), the check (exact request, text, speech), up to
+  date, "update my NVIDIA driver" end to end (plan shows address + command, script has the signature check, the
+  admin folder, the switches), an install that didn't take, a wrongly signed download, service problems (unreachable,
+  a foreign address, an injected version, no driver) install nothing, no/unknown NVIDIA card, Dell in the same step,
+  makers' apps named, the command line limit (inline and from a hash-checked file), the voice phrases.
 
 ## How to test
 

@@ -824,23 +824,54 @@ class WinShell:
         return CommandOutput(proc.returncode if not timed_out else None, dec(out.get("out", b"")),
                              dec(out.get("err", b"")), timed_out)
 
+    #: Windows' limit for a command line - the elevated command is encoded twice (it must fit as a whole)
+    MAX_COMMAND_LINE = 32_767
+
+    @classmethod
+    def elevated_outer(cls, command: str, out_file: str, powershell: str) -> str:
+        """The script that asks for the UAC prompt and runs ``command`` (encoded) as administrator."""
+        q_tmp = out_file.replace("'", "''")
+        q_ps = powershell.replace("'", "''")
+        inner = cls._encode(f"& {{ {command} }} *> '{q_tmp}'")
+        return (f"try {{ $p = Start-Process -FilePath '{q_ps}' -Verb RunAs -WindowStyle Hidden "
+                f"-ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','{inner}' -Wait -PassThru; "
+                f"exit $p.ExitCode }} catch {{ Write-Error $_; exit 1223 }}")
+
+    @staticmethod
+    def file_loader(script_file: str, digest: str) -> str:
+        """Runs the script in ``script_file`` only if its SHA-256 is ``digest`` (which travels on the command line):
+        a file changed by anyone in between is refused, and exactly the bytes that were checked are run."""
+        q = script_file.replace("'", "''")
+        return (f"$b = [IO.File]::ReadAllBytes('{q}'); "
+                "$h = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($b)) -replace '-', ''; "
+                f"if ($h -ne '{digest}') {{ throw 'The administrator script was changed - not run.' }}; "
+                "& ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString($b)))")
+
     def run_elevated(self, command: str, timeout: float, cancel: CancelToken) -> CommandOutput:
+        import hashlib
+
         fd, tmp = tempfile.mkstemp(prefix="assistant-admin-", suffix=".txt")
         os.close(fd)
-        q_tmp = tmp.replace("'", "''")
-        q_ps = self.powershell.replace("'", "''")
-        inner = self._encode(f"& {{ {command} }} *> '{q_tmp}'")
-        outer = (f"try {{ $p = Start-Process -FilePath '{q_ps}' -Verb RunAs -WindowStyle Hidden "
-                 f"-ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','{inner}' -Wait -PassThru; "
-                 f"exit $p.ExitCode }} catch {{ Write-Error $_; exit 1223 }}")
+        script_file = ""
+        outer = self.elevated_outer(command, tmp, self.powershell)
+        if len(self._encode(outer)) + 300 > self.MAX_COMMAND_LINE:
+            # too long to pass inline (it is encoded twice): from a file, checked by its hash
+            data = command.encode("utf-8")
+            fd, script_file = tempfile.mkstemp(prefix="assistant-admin-", suffix=".ps1.txt")
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+            outer = self.elevated_outer(self.file_loader(script_file, hashlib.sha256(data).hexdigest().upper()),
+                                        tmp, self.powershell)
         try:
             res = self.run(outer, "powershell", timeout, cancel)
             body = Path(tmp).read_text(encoding="utf-16", errors="replace") if Path(tmp).stat().st_size else ""
         finally:
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
+            for f in (tmp, script_file):
+                try:
+                    if f:
+                        os.remove(f)
+                except OSError:
+                    pass
         if res.code == 1223:
             return CommandOutput(1223, "", "The administrator prompt was cancelled.", False)
         return CommandOutput(res.code, body, res.stderr, res.timed_out)

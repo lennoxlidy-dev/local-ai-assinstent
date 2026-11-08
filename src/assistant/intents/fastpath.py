@@ -279,6 +279,20 @@ DRIVERS_CHECK = P(r"((check|look|search)( for| if there are)? (new |any )?driver
                   r"sind (meine|die|alle meine|alle) treiber (aktuell|auf dem neuesten stand)|gibt es (neue )?treiber[ -]?updates)")
 
 
+_GPU_EN = r"(nvidia|graphics card|graphics|gpu|video card|game ready)"
+_GPU_DE = r"(nvidia[ -]?|grafikkarten|grafik)"
+NVIDIA_UPDATE = P(rf"((update|upgrade) (my |the )?{_GPU_EN} drivers?( now)?|"
+                  rf"(install|get)( me)? (the )?(latest|newest|new|newer) {_GPU_EN} drivers?|"
+                  rf"(aktualisiere|update|updatet?) (meinen |den |die )?{_GPU_DE}treiber|"
+                  rf"(meinen |den |die )?{_GPU_DE}treiber (aktualisieren|updaten)|"
+                  rf"installiere (den |die )?(neuesten?|aktuellen?) {_GPU_DE}treiber)")
+NVIDIA_CHECK = P(rf"((is there|are there) (a |any )?(new|newer) {_GPU_EN} drivers?|"
+                 rf"(check|look|search)( for)? (a |any )?(new |newer )?{_GPU_EN} drivers?( updates?)?|"
+                 rf"(is|are) (my|the) {_GPU_EN} drivers? up to date|"
+                 rf"gibt es (einen |neue )?(neuen )?{_GPU_DE}treiber|"
+                 rf"(ist|sind) (mein|meine|der|die) {_GPU_DE}treiber (aktuell|auf dem neuesten stand))")
+
+
 def drivers_reply(res: ToolResult, lang: str) -> str:
     speak = (res.data or {}).get("speak") if isinstance(res.data, dict) else None
     return (speak or {}).get(lang) or res.text
@@ -377,6 +391,12 @@ class FastPath:
                               _forget_reply)
         if _full(LOCK, t):
             return FastIntent("lock", "power", {"action": "lock"}, _r("Locked.", "Gesperrt."))
+        if _full(NVIDIA_UPDATE, t):
+            return FastIntent("drivers.nvidia.update", "driver_updates", {"action": "install", "source": "nvidia"},
+                              drivers_reply)
+        if _full(NVIDIA_CHECK, t):
+            return FastIntent("drivers.nvidia.check", "driver_updates", {"action": "check", "source": "nvidia"},
+                              drivers_reply)
         if _full(DRIVERS_UPDATE, t):
             return FastIntent("drivers.update", "driver_updates", {"action": "install"}, drivers_reply)
         if _full(DRIVERS_CHECK, t):

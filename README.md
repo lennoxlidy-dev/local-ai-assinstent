@@ -112,7 +112,8 @@ listens for 5 seconds for a follow-up without the name.
 | "Jarvis, what's on my screen?" | UI Automation / OCR / vision |
 | "Jarvis, remember that my sister's name is Lea" / "what do you know about me?" / "forget that …" | memory |
 | "Jarvis, gaming mode" / "start gaming mode" | runs your routine instantly (see [Routines](#routines)) |
-| "Jarvis, update my drivers" / "check for driver updates" | Windows Update: lists new drivers, asks, then installs (see [Driver updates](#driver-updates)) |
+| "Jarvis, update my drivers" / "check for driver updates" | Windows Update, the newest NVIDIA driver and Dell Command \| Update: lists them, asks, then installs (see [Driver updates](#driver-updates)) |
+| "Jarvis, update my NVIDIA driver" / "is there a new NVIDIA driver?" | only the NVIDIA graphics driver ("aktualisiere meinen Grafiktreiber") |
 | "Jarvis, stop" | stops talking and cancels the current request |
 
 - **Push-to-talk:** `Ctrl+Alt+Space` (no name needed). **Panic:** `Ctrl+Alt+Esc` silences it, cancels
@@ -137,7 +138,7 @@ without the language model. Create routines in the setup wizard, from a template
 |---|---|
 | **Say something** | speaks a sentence the moment the routine reaches it, e.g. "Gaming mode activated. All systems online." |
 | **Play a sound** | plays an MP3, WAV, FLAC or OGG file (WMA/M4A through Windows' own player), no player window. Click **Choose sound…**, then choose how it plays: **Plays while the next steps run**; **Plays, then the next step**; or **Keeps playing until the routine is done** (repeats if it's shorter, fades out when the last step is done). **play for … s** sets how long: a longer song fades out at exactly that time (e.g. the first 60 s of a song), a shorter sound repeats until then; empty = the whole sound once. With *Keeps playing until the routine is done* the field is **at least … s**. The sound's length is shown next to its name, and a line under the fields says what will happen ("Plays the first 60 s, then fades out."); **volume** in % |
-| **Check / update drivers** | **Only check** says which driver updates Windows Update has; **Install** asks first and shows the Windows administrator prompt (see [Driver updates](#driver-updates)) |
+| **Check / update drivers** | **Only check** says which driver updates there are (Windows Update, NVIDIA, …); **Install** asks first and shows the Windows administrator prompt (see [Driver updates](#driver-updates)) |
 | **Open an app** | e.g. Steam, Discord, your game launcher (`{"name": "Steam"}`) |
 | **Volume**, **Media**, **Play music**, **Virtual desktop**, **Wait**, … | everything the assistant can do, with the same permission checks |
 
@@ -166,21 +167,40 @@ Sounds while I'm talking*), so you can hear it over the music. *Voice volume* th
 ## Driver updates
 
 Say **"Jarvis, update my drivers"**, or "check for driver updates" to only see what's available ("aktualisiere meine
-Treiber" in German). The assistant asks **Windows Update** for new drivers for your hardware. That's the same official,
-signed source as *Windows Settings → Windows Update → Advanced options → Optional updates → Driver updates*.
+Treiber" in German). The assistant looks in three places:
 
-1. It shows the exact list (name, date, size) and asks you first. Updates are never installed without your yes.
-2. After your yes, Windows shows its administrator (UAC) prompt, and only the listed updates are installed.
-3. Installing runs in the background, so you can keep using the assistant. A notification says when it's done and
-   whether a restart is needed. A running installation is never interrupted, not even by "stop".
+- **Windows Update**: new drivers for your hardware. That's the same official, signed source as *Windows Settings →
+  Windows Update → Advanced options → Optional updates → Driver updates*.
+- **NVIDIA**, for the graphics driver: Windows Update usually offers an older one. The assistant asks NVIDIA's driver
+  service which **Game Ready driver** is the newest for your card, the same package the NVIDIA App installs. It
+  compares that with the version you have. Only this: **"Jarvis, update my NVIDIA driver"**, or "is there a new
+  NVIDIA driver?" ("aktualisiere meinen Grafiktreiber").
+- **Dell Command | Update**, on Dell PCs that have it: it installs the driver updates Dell has for your model, never
+  BIOS or firmware.
 
-Your **NVIDIA graphics driver**: Windows Update usually offers an older version. The newest Game Ready driver comes
-from the NVIDIA App ("Jarvis, open NVIDIA App"). The answer tells you which driver version you have.
+Then:
+
+1. It shows the exact list (name, date, size; for NVIDIA the download address and the command) and asks you first.
+   Nothing is installed without your yes.
+2. After your yes, Windows shows its administrator (UAC) prompt **once**, and only the listed updates are installed.
+   The NVIDIA driver is downloaded from NVIDIA's own server into a folder only administrators can change, and it is
+   only run if it is signed by NVIDIA. It installs silently. Close games first, because the screen goes dark for a
+   moment.
+3. Installing runs in the background, so you can keep using the assistant. A notification says when it's done, which
+   NVIDIA version is now installed, and whether a restart is needed. A running installation is never interrupted, not
+   even by "stop".
+
+Other makers' apps can't be controlled by another program: **NVIDIA App**, **Lenovo Vantage**, **MyASUS**,
+**Armoury Crate**, **MSI Center**, **HP Support Assistant**, **Intel Driver & Support Assistant**, **AMD Software**.
+When one of them is on your PC, the answer names it, and **"Jarvis, open Lenovo Vantage"** opens it for its other
+updates (BIOS, firmware, the maker's own tools).
 
 ## Privacy and safety
 
 - **Fully local.** The internet is only used for downloads: the installer (astral.sh for uv, PyPI for the
-  Python packages, a Python build), llama.cpp (github.com) and the models (huggingface.co, github.com). The
+  Python packages, a Python build), llama.cpp (github.com) and the models (huggingface.co, github.com). When you
+  ask about drivers, Windows Update is asked, and NVIDIA's driver service (gfwsl.geforce.com) gets your
+  graphics card's product number; installing downloads the driver from download.nvidia.com. The
   language model server listens only on `127.0.0.1` and uses a random key, so web pages can't use it.
 - **Microphone audio stays in memory** and is never written to disk, unless you turn on recordings in
   *Settings → Privacy* (off by default). Transcripts are not written to the logs unless you enable that.
